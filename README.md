@@ -37,17 +37,17 @@ Claude が考えている間、カニード がプロンプトの上でダンジ
 2. このリポジトリをプラグインとして読み込む。試すだけならクローンして 1 セッション読み込み:
 
    ```sh
-   git clone <このリポジトリ>
-   cd kaneed-dungeon
+   git clone https://github.com/aieo-product/kaneed-dungeon-claudemod.git
+   cd kaneed-dungeon-claudemod
    claude --plugin-dir .
    ```
 
    リポジトリ直下の `.claude/settings.json` が、このフォルダで起動したセッションに環境変数を設定する。
 
-   常用するならマーケットプレイスとして登録（リポジトリ自身がマーケットプレイス）:
+   常用するならマーケットプレイスとして登録（リポジトリ自身がマーケットプレイス。private リポジトリなので `gh auth setup-git` 済みで HTTPS 認証が通る環境が前提）:
 
    ```sh
-   claude plugin marketplace add <owner>/kaneed-dungeon
+   claude plugin marketplace add aieo-product/kaneed-dungeon-claudemod
    claude plugin install kaneed-dungeon@kaneed-dungeon
    ```
 
