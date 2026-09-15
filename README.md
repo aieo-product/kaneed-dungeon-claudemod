@@ -107,7 +107,16 @@ bunx -p typescript tsc -p .
 
 `tools/sprites/` に一式ある。
 
-1. `hero/` — 主人公をコマ絵にするときの置き場（任意）。`idle_0, idle_1, walk_0, walk_1, attack_0, attack_1, hurt, dead` の 8 枚の RGBA PNG（全コマ同じキャンバス、足元を揃える）と、`equip/<slot>_<tier>.png`（hat / eyewear / shield / sword / boots × 1〜5、本体と同じキャンバスで idle_0 に合わせて配置）。`frames.json` にコマごとの装備オフセットを書ける（`{"walk_1": [0, 1]}` で全部位共通、`{"idle_1": {"hat": [0, 1], "boots": [0, 0]}}` で部位別）。追加コマ `idle_glance`（チラ見）、`idle_blink`（まばたき）、`victory`（撃破後の勝利ポーズ）も使う。現在はこの形式で「カニード」（24×16、11 コマ、装備 25 枚）が入っている。あると `hooks/boards/dungeon.tsx` の `drawHero()` がコマを切り替え、装備を boots → shield → sword → hat → eyewear の順で重ね描きする。無ければ次の 1 枚絵を使う。
+1. `hero/` — 主人公カニードのコマ絵。**正典は `hero/src/` の Python（`kaneed24.py` がドット絵の定義、`hero_export.py` が書き出し）で、`hero/*.png`・`hero/equip/*.png`・`frames.json` はその生成物**。接地行・部位オフセット・パレットが生成元で一箇所に決まるので、PNG を手で直さない。更新手順:
+
+   ```sh
+   # 1. hero/src/kaneed24.py を編集
+   python3 tools/sprites/hero/src/hero_export.py .      # 2. PNG と frames.json を書き出す（引数はリポジトリのパス。省略時は作成環境の絶対パス）
+   python3 tools/sprites/make_sprites.py hooks/boards/sprites.ts   # 3. スプライトデータを再生成
+   bunx -p typescript tsc -p .                          # 4. 型チェック
+   ```
+
+   フォルダの中身は次のとおり。`idle_0, idle_1, walk_0, walk_1, attack_0, attack_1, hurt, dead` の 8 枚の RGBA PNG（全コマ同じキャンバス、足元を揃える）と、`equip/<slot>_<tier>.png`（hat / eyewear / shield / sword / boots × 1〜5、本体と同じキャンバスで idle_0 に合わせて配置）。`frames.json` にコマごとの装備オフセットを書ける（`{"walk_1": [0, 1]}` で全部位共通、`{"idle_1": {"hat": [0, 1], "boots": [0, 0]}}` で部位別）。追加コマ `idle_glance`（チラ見）、`idle_blink`（まばたき）、`victory`（撃破後の勝利ポーズ）も使う。現在はこの形式で「カニード」（24×16、11 コマ、装備 25 枚）が入っている。あると `hooks/boards/dungeon.tsx` の `drawHero()` がコマを切り替え、装備を boots → shield → sword → hat → eyewear の順で重ね描きする。無ければ次の 1 枚絵を使う。
 2. `fallback_pixel.png` — 主人公。公式 カニード のドット絵（12×8 マス）を採寸したもので、`make_sprites.py` が 2 倍の 24×16 px でそのまま使う（縮小も減色もしない）。別のキャラに差し替えるときはこのファイルを置き換える。高さ 11px 以上の絵はそのままの大きさで使われる（舞台に合わせて自動で縮む）。
 3. `source/` — higgsfield MCP で生成した 1024×1024 の元絵（8 種の敵）。一番うまくいった作り方は次の組み合わせ:
    - `grid16.png`（16×16 の格子画像）を参照画像 `image_references` として渡し、「この格子に 1 マス 1 色で塗れ、マスを割るな、輪郭なし、平塗り 4〜5 色、目は 2×2 マス」と指示する。マスにぴたりと揃った絵になる。
@@ -137,7 +146,7 @@ python3 tools/sprites/make_sprites.py hooks/boards/sprites.ts
 ## 権利上の注意
 
 - `tools/sprites/fallback_pixel.png` は Anthropic の公式マスコット Clawd のドット絵を採寸したもので、hero フォルダが無いときのフォールバック専用。Clawd の権利は Anthropic に帰属し、このリポジトリは Anthropic と無関係の非公式ファン作品である。公開配布する場合は Anthropic のブランドガイドラインを確認するか、このファイルを差し替えること。
-- 敵の元絵は higgsfield MCP（GPT Image 2.5）で生成したもの。主人公カニードは別セッションで作成した独自キャラクターで、生成元は `tools/sprites/hero/src/`（`kaneed24.py` / `hero_export.py`）。PNG を直接編集した場合は生成元と食い違うので、どちらを正典にするかは編集時に決めて README に書く。
+- 敵の元絵は higgsfield MCP（GPT Image 2.5）で生成したもの。主人公カニードは別セッションで作成した独自キャラクターで、正典は `tools/sprites/hero/src/`（`kaneed24.py` / `hero_export.py`）。PNG と `frames.json` は生成物なので直接編集しない（手順は「スプライトの作り方」）。
 
 ## ライセンス
 
