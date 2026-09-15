@@ -116,6 +116,8 @@ bunx -p typescript tsc -p .
    bunx -p typescript tsc -p .                          # 4. 型チェック
    ```
 
+   **装備の位置はアンカーで決まる。** `hero/anchors.json` に主人公の 5 点（`hat` 頭の上・`eyes` 両目の中間・`hand_l` 左手・`hand_r` 右手・`feet` 足元）を idle_0 の座標で持ち、`frames` にコマごとの上書きを書く。`hero/equip/anchors.json` は各レイヤーが「どの点に、画像のどの画素を合わせるか」を持つ。描画側はその 2 点が重なるようにレイヤーをずらすので、**主人公を差し替えても同じ 25 枚の装備がそのまま乗る**。差し替え手順: 24×16 のコマ絵（最低 `idle_0.png`）と `anchors.json` を `hero/` に置く。目の間隔が違う絵ではアイウェアがずれるので、必要なら `hero/equip/` に自分のレイヤーを置いて上書きする。予備スプライト用の例が `fallback_anchors.json`、両方に同じ装備を着せた比較が `hero/preview_anchors_x6.png`（`hero/src/anchor_preview.py` で生成）。`frames.json` は同じ元データから出る旧形式で、`anchors.json` が無いときの互換用。
+
    フォルダの中身は次のとおり。`idle_0, idle_1, walk_0, walk_1, attack_0, attack_1, hurt, dead` の 8 枚の RGBA PNG（全コマ同じキャンバス、足元を揃える）と、`equip/<slot>_<tier>.png`（hat / eyewear / shield / sword / boots × 1〜5、本体と同じキャンバスで idle_0 に合わせて配置）。`frames.json` にコマごとの装備オフセットを書ける（`{"walk_1": [0, 1]}` で全部位共通、`{"idle_1": {"hat": [0, 1], "boots": [0, 0]}}` で部位別）。追加コマ `idle_glance`（チラ見）、`idle_blink`（まばたき）、`victory`（撃破後の勝利ポーズ）も使う。現在はこの形式で「カニード」（24×16、11 コマ、装備 25 枚）が入っている。あると `hooks/boards/dungeon.tsx` の `drawHero()` がコマを切り替え、装備を boots → shield → sword → hat → eyewear の順で重ね描きする。無ければ次の 1 枚絵を使う。
 2. `fallback_pixel.png` — 主人公。公式 カニード のドット絵（12×8 マス）を採寸したもので、`make_sprites.py` が 2 倍の 24×16 px でそのまま使う（縮小も減色もしない）。別のキャラに差し替えるときはこのファイルを置き換える。高さ 11px 以上の絵はそのままの大きさで使われる（舞台に合わせて自動で縮む）。
 3. `source/` — higgsfield MCP で生成した 1024×1024 の元絵（8 種の敵）。一番うまくいった作り方は次の組み合わせ:
