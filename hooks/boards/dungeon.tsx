@@ -5,7 +5,8 @@ import { stats, xpNeeded, type Hero } from '../game/hero.ts'
 import { isWizardItem, itemName, rarityColor, rarityName, RARITY_COLORS, SLOT_LABEL, SLOTS, type Slot } from '../game/items.ts'
 import { idx, T, tileAt } from '../game/map.ts'
 import { rebuildFloor, startRun, step, takeEvents, takeFresh, testFailed, testPassed, type GameEvent, type RunSummary, type State } from '../game/sim.ts'
-import { HERO_OFFSETS, SPRITES, type Pixels } from './sprites.ts'
+import { EQUIP_ANCHORS, FALLBACK_ANCHORS, HERO_ANCHORS, HERO_OFFSETS, SPRITES, type Pixels } from './sprites.ts'
+import { layerOffset } from './anchors.ts'
 
 // The board: a surface module on the drawing thread. The dungeon is simulated in ticks of half a
 // second (../game/sim.ts); this file turns each tick's events into a side-scrolling scene drawn ten
@@ -254,12 +255,6 @@ function heroFrameKey(pose: HeroPose, alt: number): string {
   if (SPRITES[`hero_idle_${alt % 2}`]) return `hero_idle_${alt % 2}`
   return SPRITES.hero_idle_0 ? 'hero_idle_0' : 'kaneed'
 }
-const layerOffset = (frame: string, slot: Slot): [number, number] => {
-  const off = HERO_OFFSETS[frame]
-  if (!off) return [0, 0]
-  if (Array.isArray(off)) return off
-  return off[slot] ?? [0, 0]
-}
 function drawHero(canvas: Canvas, hero: Hero, pose: HeroPose, alt: number, x: number, y: number, maxH: number, tint?: (c: string) => string): Pixels {
   const key = heroFrameKey(pose, alt)
   const body = fit(spriteOf(key), key, maxH)
@@ -267,11 +262,14 @@ function drawHero(canvas: Canvas, hero: Hero, pose: HeroPose, alt: number, x: nu
   // layers are drawn only when the body was not shrunk, since they share its canvas
   if (body === SPRITES[key]) {
     const frame = key.replace('hero_', '')
+    // the fallback figure has its own anchor table; the hero frames share theirs
+    const anchors = key === 'fallback' ? FALLBACK_ANCHORS : HERO_ANCHORS
     for (const slot of EQUIP_ORDER) {
       const item = hero.equipment[slot]
-      const layer = item ? SPRITES[`equip_${slot}_${item.tier}`] : undefined
+      const layerKey = item ? `equip_${slot}_${item.tier}` : ''
+      const layer = layerKey ? SPRITES[layerKey] : undefined
       if (!layer) continue
-      const [dx, dy] = layerOffset(frame, slot)
+      const [dx, dy] = layerOffset(frame, slot, layerKey, anchors, EQUIP_ANCHORS, HERO_OFFSETS[frame])
       canvas.blit(layer, x + dx, y + dy, tint)
     }
   }
