@@ -1,0 +1,102 @@
+{
+ "hat_1": {
+  "anchor": "hat",
+  "at": [10, 5]
+ },
+ "hat_2": {
+  "anchor": "hat",
+  "at": [10, 5]
+ },
+ "hat_3": {
+  "anchor": "hat",
+  "at": [10, 5]
+ },
+ "hat_4": {
+  "anchor": "hat",
+  "at": [10, 5]
+ },
+ "hat_5": {
+  "anchor": "hat",
+  "at": [10, 5]
+ },
+ "eyewear_1": {
+  "anchor": "eyes",
+  "at": [10, 2]
+ },
+ "eyewear_2": {
+  "anchor": "eyes",
+  "at": [10, 2]
+ },
+ "eyewear_3": {
+  "anchor": "eyes",
+  "at": [10, 2]
+ },
+ "eyewear_4": {
+  "anchor": "eyes",
+  "at": [10, 2]
+ },
+ "eyewear_5": {
+  "anchor": "eyes",
+  "at": [10, 2]
+ },
+ "shield_1": {
+  "anchor": "hand_l",
+  "at": [2, 7]
+ },
+ "shield_2": {
+  "anchor": "hand_l",
+  "at": [2, 7]
+ },
+ "shield_3": {
+  "anchor": "hand_l",
+  "at": [2, 7]
+ },
+ "shield_4": {
+  "anchor": "hand_l",
+  "at": [2, 7]
+ },
+ "shield_5": {
+  "anchor": "hand_l",
+  "at": [2, 7]
+ },
+ "sword_1": {
+  "anchor": "hand_r",
+  "at": [22, 7]
+ },
+ "sword_2": {
+  "anchor": "hand_r",
+  "at": [22, 7]
+ },
+ "sword_3": {
+  "anchor": "hand_r",
+  "at": [22, 7]
+ },
+ "sword_4": {
+  "anchor": "hand_r",
+  "at": [22, 7]
+ },
+ "sword_5": {
+  "anchor": "hand_r",
+  "at": [22, 7]
+ },
+ "boots_1": {
+  "anchor": "feet",
+  "at": [10, 12]
+ },
+ "boots_2": {
+  "anchor": "feet",
+  "at": [10, 12]
+ },
+ "boots_3": {
+  "anchor": "feet",
+  "at": [10, 12]
+ },
+ "boots_4": {
+  "anchor": "feet",
+  "at": [10, 12]
+ },
+ "boots_5": {
+  "anchor": "feet",
+  "at": [10, 12]
+ }
+}

@@ -60,10 +60,10 @@ EYE = {
     "open": ["WWW", "WKW", "WWW"],
     "narrow": ["...", "WKW", "WWW"],
     "happy": ["WWW", "W.W", "..."],
-    "x": ["K.K", ".K.", "K.K"],
+    "x": ["W.W", ".W.", "W.W"],
     "shock": ["WWW", "WKW", "WWW"],
     "look_r": ["WWW", "WWK", "WWW"],
-    "blink": ["...", "KKK", "..."],
+    "blink": ["...", "WWW", "..."],
 }
 MOUTH = {
     "smile": ["KK", "PP"],
