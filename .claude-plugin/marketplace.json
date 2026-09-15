@@ -1,0 +1,13 @@
+{
+  "name": "kaneed-dungeon",
+  "owner": { "name": "otani" },
+  "metadata": { "description": "kaneed-dungeon: カニード explores a dungeon above the prompt while Claude works" },
+  "plugins": [
+    {
+      "name": "kaneed-dungeon",
+      "source": "./",
+      "description": "カニード が Claude の作業中にダンジョンを自動探索する。回復は Lv アップとテスト成功だけ、倒れると Lv 1 から",
+      "license": "MIT"
+    }
+  ]
+}
