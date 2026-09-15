@@ -4,14 +4,30 @@
   "eyewear": "eyes",
   "shield": "hand_l",
   "sword": "hand_r",
+  "feet": "feet",
   "boots": "feet"
  },
  "default": {
-  "hat": [11, 0],
-  "eyes": [11, 2],
-  "hand_l": [1, 5],
-  "hand_r": [22, 5],
-  "feet": [11, 12]
+  "hat": [
+   12,
+   3
+  ],
+  "eyes": [
+   12,
+   6
+  ],
+  "hand_l": [
+   4,
+   9
+  ],
+  "hand_r": [
+   19,
+   9
+  ],
+  "feet": [
+   12,
+   13
+  ]
  },
  "frames": {}
 }
