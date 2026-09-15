@@ -3,6 +3,7 @@ import { bfs, chebyshev, generateFloor, idx, isFrontier, manhattan, neighbours, 
 import { KINDS, spawnEnemies, type Enemy } from './enemies.ts'
 import { damage, equip, gainXp, heal, newHero, stats, type Hero } from './hero.ts'
 import { isWizardItem, itemName, rarityName, rollItem } from './items.ts'
+import { affordable, priceOf, REMEDIES, rollShelf, wareName, type Ware } from './shop.ts'
 
 // The game, one tick at a time. A tick is one thing happening: a step, or one exchange of blows
 // with whatever stands next to Kaneed. The board calls `step` on a timer while Claude works; the
@@ -28,6 +29,8 @@ export type GameEvent =
   | { type: 'die'; by: string }
   | { type: 'respawn'; run: number }
   | { type: 'rebuild' }
+  // a visit to the shop: the shelf, the ware bought (-1 when the gold covered nothing), and what came of it
+  | { type: 'shop'; shelf: Ware[]; lv: number; gold: number; hp: number; equipment: Hero['equipment']; pick: number; price: number; healed: number; item: { name: string; rarity: number; better: boolean; replaced: string | null; wizard: boolean } | null }
 
 export type State = {
   r: Rng
@@ -101,7 +104,7 @@ export function startRun(seed: number, run: number, now: number, saved?: Hero | 
     now,
     foe: null,
   }
-  newFloor(s, floorNum, saved ? `カニード は B${floorNum}F の探索を再開した（Lv ${hero.lv}）` : `カニード の冒険 #${run} が始まった。回復は Lv アップ（半分）とテスト成功（1/3）だけ`)
+  newFloor(s, floorNum, saved ? `カニード は B${floorNum}F の探索を再開した（Lv ${hero.lv}）` : `カニード の冒険 #${run} が始まった。回復は Lv アップ（半分）とテスト成功（1/3）、あとはショップを見つけたときだけ`)
   return s
 }
 
@@ -152,6 +155,39 @@ function pickUp(s: State, power: number, from: string) {
   emit(s, { type: 'item', name: itemName(item), rarity: item.rarity, better, replaced: replaced ? itemName(replaced) : null, wizard: isWizardItem(item) })
 }
 
+// Kaneed walks into a shop: three wares on the shelf, and it buys one of those its gold covers, at
+// random. A remedy heals at once; a piece of equipment is worn at once, as a found one is. The
+// counter closes behind it.
+export function visitShop(s: State) {
+  s.floor.tiles[idx(s.floor, s.pos.x, s.pos.y)] = T.SHOP_CLOSED
+  const shelf = rollShelf(s.r, s.hero.lv + s.floorNum)
+  const { lv, gold, hp, equipment } = s.hero
+  const max = stats(s.hero).maxHp
+  const choices = affordable(shelf, gold, lv, s.hero.hp >= max)
+  log(s, `ショップを見つけた！棚には ${shelf.map(wareName).join('・')}`)
+  const pick = choices.length ? s.r.pick(choices) : -1
+  if (pick < 0) {
+    log(s, `所持金 ${gold} G では何も買えなかった…`)
+    emit(s, { type: 'shop', shelf, lv, gold, hp, equipment, pick, price: 0, healed: 0, item: null })
+    return
+  }
+  const ware = shelf[pick]
+  const price = priceOf(ware, lv)
+  s.hero = { ...s.hero, gold: gold - price }
+  if (ware.kind !== 'gear') {
+    const { hero, healed } = heal(s.hero, REMEDIES[ware.kind].ratio)
+    s.hero = hero
+    log(s, `ショップで ${wareName(ware)} を ${price} G で購入。カニード は ${healed} 回復した（HP ${hero.hp}/${max}）`)
+    emit(s, { type: 'shop', shelf, lv, gold, hp, equipment, pick, price, healed, item: null })
+    return
+  }
+  const { hero, replaced, better } = equip(s.hero, ware.item)
+  s.hero = hero
+  const verdict = !replaced ? '身につけた' : better ? `${itemName(replaced)} から持ち替えた（強化）` : `${itemName(replaced)} から持ち替えてしまった（弱体化！）`
+  log(s, `ショップで ${wareName(ware)} を ${price} G で購入し、${verdict}`)
+  emit(s, { type: 'shop', shelf, lv, gold, hp, equipment, pick, price, healed: 0, item: { name: itemName(ware.item), rarity: ware.item.rarity, better, replaced: replaced ? itemName(replaced) : null, wizard: isWizardItem(ware.item) } })
+}
+
 function fight(s: State, foes: Enemy[]) {
   s.phase = 'fight'
   const st = stats(s.hero)
@@ -200,6 +236,12 @@ function fight(s: State, foes: Enemy[]) {
 
 function chooseTarget(s: State): Pos[] | null {
   const blocked = (x: number, y: number) => !!enemyAt(s, { x, y })
+  // a shop in sight is worth the detour
+  const shop = s.floor.shop
+  if (shop && tileAt(s.floor, shop.x, shop.y) === T.SHOP && s.explored[idx(s.floor, shop.x, shop.y)]) {
+    const toShop = bfs(s.floor, s.pos, (x, y) => x === shop.x && y === shop.y, blocked)
+    if (toShop) return toShop
+  }
   // the nearest frontier, most of the time; sometimes a farther one, so the route wanders
   const path = bfs(s.floor, s.pos, (x, y) => isFrontier(s.floor, s.explored, x, y) && !(x === s.pos.x && y === s.pos.y), blocked)
   if (path) {
@@ -241,6 +283,9 @@ function move(s: State) {
     log(s, `宝箱を開けた！${gold} G`)
     emit(s, { type: 'chest', gold })
     pickUp(s, s.hero.lv + s.floorNum + 1, '宝箱から ')
+    s.path = []
+  } else if (tile === T.SHOP) {
+    visitShop(s)
     s.path = []
   } else if (tile === T.STAIRS && !hasFrontier(s)) {
     emit(s, { type: 'descend', floor: s.floorNum + 1 })

@@ -9,8 +9,9 @@ import { countEvent, countTool, dash, newTelemetry, recordContext, recordHero, r
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
 // the dungeon itself on the drawing thread and posts its state back here to be saved.
 //
-// Kaneed explores while a model turn is running, and rests while Claude waits for you. Heals come
-// from two places only: a level up, and a test run of Claude's that passed (seen on tool.call).
+// Kaneed explores while a model turn is running, and rests while Claude waits for you. It heals for
+// free on a level up and on a test run of Claude's that passed (seen on tool.call); besides those,
+// only a shop it happens upon sells it a remedy (the board runs the visit, ./game/shop.ts).
 //
 // It also keeps this session's telemetry (./game/telemetry.ts) for the dashboard tab: every event
 // it catches, the tokens each turn spent, and Kaneed's progress at each save. Memory only.
@@ -155,6 +156,7 @@ export const register: Register = on => {
     if (data.log.length) history = [...history, ...data.log].slice(-LOG_KEEP)
     if (data.dead) hall = [...hall, data.dead].slice(-HALL_KEEP)
     recordHero(tele, { hero, floor: floorNum, maxHp: stats(hero).maxHp, log: data.log, died: !!data.dead, levels: data.levels ?? 0 }, await $.clock.now())
+    for (const line of data.log) if (line.startsWith('ショップで')) $.ui.toast(line)
     if (data.levels) $.ui.toast(`カニード が Lv ${hero.lv} になった！HP ${hero.hp} まで回復`)
     if (data.dead) $.ui.toast(`カニード は ${data.dead.killedBy} に倒された… 冒険 #${data.dead.run} は Lv ${data.dead.lv}、B${data.dead.floor}F で終わった`)
     if (!saving) {

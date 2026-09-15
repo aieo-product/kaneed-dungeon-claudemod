@@ -1,13 +1,15 @@
 import type { Rng } from './rng.ts'
+import { SHOP_CHANCE } from './shop.ts'
 
 // One floor of the dungeon: rooms joined by L-shaped corridors on a grid large enough that a
-// session lasting hours does not run out of it, and stairs down for when it does.
+// session lasting hours does not run out of it, and stairs down for when it does. Some floors keep a
+// shop in a room between the two; once Kaneed has been in, its counter stays closed.
 
-export const T = { WALL: 0, FLOOR: 1, STAIRS: 2, CHEST: 3 } as const
+export const T = { WALL: 0, FLOOR: 1, STAIRS: 2, CHEST: 3, SHOP: 4, SHOP_CLOSED: 5 } as const
 export type Tile = (typeof T)[keyof typeof T]
 export type Pos = { x: number; y: number }
 export type Room = { x: number; y: number; w: number; h: number }
-export type Floor = { w: number; h: number; tiles: Uint8Array; rooms: Room[]; entrance: Pos; stairs: Pos }
+export type Floor = { w: number; h: number; tiles: Uint8Array; rooms: Room[]; entrance: Pos; stairs: Pos; shop: Pos | null }
 
 export const idx = (f: Floor, x: number, y: number) => y * f.w + x
 export const inside = (f: Floor, x: number, y: number) => x >= 0 && y >= 0 && x < f.w && y < f.h
@@ -22,7 +24,7 @@ const DIRS: readonly Pos[] = [{ x: 1, y: 0 }, { x: -1, y: 0 }, { x: 0, y: 1 }, {
 
 const overlaps = (a: Room, b: Room) => a.x - 1 < b.x + b.w && a.x + a.w + 1 > b.x && a.y - 1 < b.y + b.h && a.y + a.h + 1 > b.y
 
-export type FloorOptions = { w?: number; h?: number; rooms?: number; chests?: number }
+export type FloorOptions = { w?: number; h?: number; rooms?: number; chests?: number; shop?: boolean }
 
 export function generateFloor(r: Rng, options: FloorOptions = {}): Floor {
   const w = options.w ?? 90
@@ -37,7 +39,7 @@ export function generateFloor(r: Rng, options: FloorOptions = {}): Floor {
     if (rooms.some(other => overlaps(room, other))) continue
     rooms.push(room)
   }
-  const f: Floor = { w, h, tiles, rooms, entrance: { x: 0, y: 0 }, stairs: { x: 0, y: 0 } }
+  const f: Floor = { w, h, tiles, rooms, entrance: { x: 0, y: 0 }, stairs: { x: 0, y: 0 }, shop: null }
   const carve = (x: number, y: number) => {
     if (inside(f, x, y)) tiles[idx(f, x, y)] = T.FLOOR
   }
@@ -60,6 +62,15 @@ export function generateFloor(r: Rng, options: FloorOptions = {}): Floor {
   f.entrance = center(rooms[0])
   f.stairs = center(rooms[rooms.length - 1])
   tiles[idx(f, f.stairs.x, f.stairs.y)] = T.STAIRS
+  // the shop sits against a room's back wall, in neither the first room nor the stairs room
+  if ((options.shop ?? r.chance(SHOP_CHANCE)) && rooms.length > 2) {
+    const room = rooms[r.range(1, rooms.length - 2)]
+    const p = { x: r.range(room.x, room.x + room.w - 1), y: room.y }
+    if (tiles[idx(f, p.x, p.y)] === T.FLOOR) {
+      tiles[idx(f, p.x, p.y)] = T.SHOP
+      f.shop = p
+    }
+  }
   const chests = options.chests ?? 5
   let placed = 0
   for (let tries = 0; tries < 200 && placed < chests && rooms.length > 1; tries++) {
