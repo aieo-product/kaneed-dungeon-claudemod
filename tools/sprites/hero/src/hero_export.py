@@ -1,16 +1,8 @@
-# /// script
-# requires-python = ">=3.11"
-# dependencies = ["pillow", "numpy"]
-# ///
-"""Export the Kaneed hero frames + 25 equipment layers into tools/sprites/hero/.
-
-Run from the repository root (uv resolves the dependencies above):
-    uv run tools/sprites/hero/src/hero_export.py .
+"""Export the Kaneed hero frames + 25 equipment layers into clawd-dungeon/tools/sprites/hero/.
 
 Frames (24x16, RGBA): idle_0 idle_1 walk_0 walk_1 attack_0 attack_1 hurt dead (+ extras).
 Equipment layers: equip/<slot>_<tier>.png on the same canvas, aligned to idle_0.
 frames.json: per-frame, per-slot (dx, dy) so a layer follows the part it is attached to.
-Also writes preview_equip_x6.png next to the frames (all tiers per slot, two full gear sets).
 """
 import json
 import sys
@@ -20,8 +12,8 @@ from PIL import Image
 
 import kaneed24 as K
 
-# repository root: first argument, else the root this file lives in (…/tools/sprites/hero/src)
-REPO = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[4]
+REPO = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(
+    "/Volumes/AIWorkSSD/AIWorkSpace/github/otani-side/kaneed-dungeon")
 HERO = REPO / "tools/sprites/hero"
 EQUIP = HERO / "equip"
 W, H = K.W, K.H
@@ -51,6 +43,42 @@ OFFSETS = {
     "hurt": {"hat": [-1, 0], "eyewear": [-3, 0], "shield": [-1, 0], "sword": [-1, 1], "boots": [-1, 0]},
     "dead": {"hat": [0, 2], "eyewear": [0, 4], "shield": [0, 3], "sword": [0, 4], "boots": [0, 2]},
 }
+
+# Anchor points (idle_0, hero canvas px). A hero that replaces Kaneed supplies its own anchors.json
+# with the same keys; each equipment layer declares which anchor it hangs from, and the game blits
+# the layer so the two anchors coincide. Per-frame anchors = base + the slot offset above.
+ANCHOR_OF = {"hat": "hat", "eyewear": "eyes", "shield": "hand_l", "sword": "hand_r", "boots": "feet"}
+BASE_ANCHORS = {
+    "hat": [10, 5],      # centre of the shell top, where the hat brim sits
+    "eyes": [10, 2],     # midpoint between the two eyes, at eye height
+    "hand_l": [2, 7],    # small claw (shield side)
+    "hand_r": [22, 7],   # big claw grip (sword side)
+    "feet": [10, 12],    # centre of the leg row where boots go
+}
+
+
+def dumps_compact(obj):
+    """json.dumps with indent, but coordinate pairs kept on one line."""
+    import re
+    txt = json.dumps(obj, indent=1, ensure_ascii=False)
+    return re.sub(r"\[\s+(-?\d+),\s+(-?\d+)\s+\]", r"[\1, \2]", txt)
+
+
+def hero_anchors():
+    frames = {}
+    for f, per_slot in OFFSETS.items():
+        frames[f] = {}
+        for slot, key in ANCHOR_OF.items():
+            dx, dy = per_slot[slot]
+            bx, by = BASE_ANCHORS[key]
+            frames[f][key] = [bx + dx, by + dy]
+    return {"slots": ANCHOR_OF, "default": BASE_ANCHORS, "frames": frames}
+
+
+def equip_anchors():
+    return {f"{slot}_{t}": {"anchor": ANCHOR_OF[slot], "at": BASE_ANCHORS[ANCHOR_OF[slot]]}
+            for slot in ANCHOR_OF for t in range(1, 6)}
+
 
 # ---- equipment art -----------------------------------------------------------
 # idle_0 anatomy: eyes 3x3 at (7..9,1..3) and (11..13,1..3); stalks x=8,12 y=4..5; body x=5..16
@@ -204,7 +232,9 @@ def main():
     for slot, mk in MAKERS.items():
         for t in range(1, 6):
             mk(t).im.save(EQUIP / f"{slot}_{t}.png")
-    (HERO / "frames.json").write_text(json.dumps(OFFSETS, indent=1) + "\n")
+    (HERO / "frames.json").write_text(dumps_compact(OFFSETS) + "\n")
+    (HERO / "anchors.json").write_text(dumps_compact(hero_anchors()) + "\n")
+    (EQUIP / "anchors.json").write_text(dumps_compact(equip_anchors()) + "\n")
 
     # previews: (a) idle_0 with each slot at tiers 1-5, (b) all 8 frames wearing tier 3 everything
     bg = (0x14, 0x11, 0x0E, 255)
@@ -220,9 +250,9 @@ def main():
     for j, row in enumerate(rows):
         for i, im in enumerate(row):
             pv.alpha_composite(im.resize((W * S, H * S), Image.NEAREST), (8 + i * (W * S + 8), 8 + j * (H * S + 8)))
-    out = HERO / "preview_equip_x6.png"
+    out = Path("out/final24/preview_equip_x6.png")
     pv.save(out)
-    print("frames:", sorted(p.name for p in HERO.glob("*.png") if not p.name.startswith("preview")))
+    print("frames:", sorted(p.name for p in HERO.glob("*.png")))
     print("equip:", len(list(EQUIP.glob("*.png"))), "layers")
     print("preview:", out)
 

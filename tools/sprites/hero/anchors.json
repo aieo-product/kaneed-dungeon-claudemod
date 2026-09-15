@@ -1,0 +1,74 @@
+{
+ "slots": {
+  "hat": "hat",
+  "eyewear": "eyes",
+  "shield": "hand_l",
+  "sword": "hand_r",
+  "boots": "feet"
+ },
+ "default": {
+  "hat": [10, 5],
+  "eyes": [10, 2],
+  "hand_l": [2, 7],
+  "hand_r": [22, 7],
+  "feet": [10, 12]
+ },
+ "frames": {
+  "idle_0": {
+   "hat": [10, 5],
+   "eyes": [10, 2],
+   "hand_l": [2, 7],
+   "hand_r": [22, 7],
+   "feet": [10, 12]
+  },
+  "idle_1": {
+   "hat": [10, 6],
+   "eyes": [10, 3],
+   "hand_l": [2, 7],
+   "hand_r": [22, 7],
+   "feet": [10, 13]
+  },
+  "walk_0": {
+   "hat": [10, 4],
+   "eyes": [10, 1],
+   "hand_l": [2, 6],
+   "hand_r": [22, 6],
+   "feet": [10, 11]
+  },
+  "walk_1": {
+   "hat": [10, 5],
+   "eyes": [10, 2],
+   "hand_l": [2, 7],
+   "hand_r": [22, 7],
+   "feet": [10, 12]
+  },
+  "attack_0": {
+   "hat": [11, 5],
+   "eyes": [11, 2],
+   "hand_l": [3, 7],
+   "hand_r": [23, 7],
+   "feet": [11, 12]
+  },
+  "attack_1": {
+   "hat": [11, 5],
+   "eyes": [11, 2],
+   "hand_l": [3, 7],
+   "hand_r": [23, 7],
+   "feet": [11, 12]
+  },
+  "hurt": {
+   "hat": [9, 5],
+   "eyes": [7, 2],
+   "hand_l": [1, 7],
+   "hand_r": [21, 8],
+   "feet": [9, 12]
+  },
+  "dead": {
+   "hat": [10, 7],
+   "eyes": [10, 6],
+   "hand_l": [2, 10],
+   "hand_r": [22, 11],
+   "feet": [10, 14]
+  }
+ }
+}
