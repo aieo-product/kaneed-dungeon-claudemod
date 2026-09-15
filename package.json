@@ -1,0 +1,12 @@
+{
+  "name": "kaneed-dungeon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx -p typescript tsc -p .",
+    "lint": "bunx --bun oxlint@1.83.0 hooks tests --deny-warnings",
+    "validate": "claude plugin validate .claude-plugin/plugin.json && claude plugin validate ."
+  }
+}
