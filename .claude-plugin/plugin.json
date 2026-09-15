@@ -1,0 +1,8 @@
+{
+  "name": "kaneed-dungeon",
+  "version": "0.1.0",
+  "description": "カニード が Claude の作業中にダンジョンを自動探索する Claude Mod。回復は Lv アップとテスト成功だけ、倒れると Lv 1 からやり直し。Needs function hooks (CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1) and an interactive terminal.",
+  "author": { "name": "otani" },
+  "license": "MIT",
+  "keywords": ["kaneed", "dungeon", "roguelike", "idle", "terminal", "function-hooks", "mod"]
+}
