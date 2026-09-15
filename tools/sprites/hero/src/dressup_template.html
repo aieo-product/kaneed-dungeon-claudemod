@@ -1,0 +1,316 @@
+<title>Kaneed Dress-up</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+<style>
+:root {
+  --ground: #14110E; --panel: #1C1713; --panel-2: #241D17; --line: #33291F; --line-2: #4A3B2C;
+  --ink: #EDE4D8; --mute: #9C8B79; --accent: #ff875f; --gold: #F0D060; --floor: #6B4A2B; --floor-2: #4A3320;
+  color-scheme: dark;
+}
+html, body { background: var(--ground); }
+body { margin: 0; color: var(--ink); font-family: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", sans-serif; padding-block: 0 56px; padding-inline: 20px; line-height: 1.7; }
+.wrap { max-width: 1180px; margin: 0 auto; }
+a { color: var(--accent); }
+header { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; padding-block: 32px 20px; border-bottom: 1px solid var(--line); }
+h1 { font-family: "DotGothic16", "Zen Kaku Gothic New", monospace; font-size: clamp(26px, 4vw, 40px); margin: 0; letter-spacing: .02em; color: var(--accent); text-wrap: balance; }
+.crumb { font-family: "DotGothic16", monospace; font-size: 12px; letter-spacing: .18em; text-transform: uppercase; color: var(--mute); text-decoration: none; }
+.crumb:hover { color: var(--ink); }
+.lede { margin: 0; color: var(--mute); max-width: 62ch; flex-basis: 100%; }
+.lede b { color: var(--ink); font-weight: 500; }
+h2 { font-family: "DotGothic16", "Zen Kaku Gothic New", monospace; font-size: 20px; margin: 0 0 10px; color: var(--ink); }
+.eyebrow { font-family: "DotGothic16", monospace; font-size: 12px; letter-spacing: .18em; color: var(--mute); text-transform: uppercase; }
+
+.studio { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 28px; padding-block: 28px; border-bottom: 1px solid var(--line); align-items: start; }
+.stage { background: #0E0C0A; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.bar { display: flex; align-items: center; gap: 7px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.bar span { width: 10px; height: 10px; border-radius: 50%; background: #3A302A; }
+.bar em { margin-left: 8px; font-style: normal; font-size: 11.5px; color: var(--mute); font-family: ui-monospace, Menlo, monospace; }
+.bar em b { color: var(--ink); font-weight: 500; }
+#stage { display: block; width: 100%; height: auto; image-rendering: pixelated; background: var(--ground); }
+.poses { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px; border-top: 1px solid var(--line); background: var(--panel); }
+.chip { font: 500 13px "Zen Kaku Gothic New", sans-serif; color: var(--mute); background: transparent; border: 1px solid var(--line-2); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+.chip:hover { color: var(--ink); border-color: var(--mute); }
+.chip[aria-pressed="true"] { color: var(--ground); background: var(--accent); border-color: var(--accent); }
+.chip:focus-visible, .tier:focus-visible, .preset:focus-visible, .toggle input:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.stepper { display: flex; align-items: center; gap: 10px; padding: 0 12px 12px; background: var(--panel); color: var(--mute); font-size: 13px; }
+.stepper code { font-family: ui-monospace, Menlo, monospace; color: var(--ink); min-width: 9ch; }
+.stepper button { font: 500 13px "Zen Kaku Gothic New", sans-serif; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+
+.slots { display: grid; gap: 14px; }
+.slot { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px 14px; }
+.slot-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.slot-head b { font-weight: 700; color: var(--ink); }
+.slot-head span { color: var(--mute); font-size: 13px; }
+.tiers { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.tier { display: grid; justify-items: center; gap: 4px; padding: 6px 2px 5px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; color: var(--mute); font: 400 11px/1.25 "Zen Kaku Gothic New", sans-serif; text-align: center; }
+.tier:hover { border-color: var(--mute); color: var(--ink); }
+.tier[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); box-shadow: inset 0 0 0 1px var(--accent); }
+.tier canvas { width: 48px; height: 48px; image-rendering: pixelated; background: var(--ground); border-radius: 3px; }
+.tier small { font-family: "DotGothic16", monospace; font-size: 10px; letter-spacing: .08em; color: var(--mute); }
+.presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.preset { font: 500 13px "Zen Kaku Gothic New", sans-serif; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+.preset:hover { border-color: var(--accent); }
+
+.sheet { padding-block: 28px 0; }
+.frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
+.frame { display: grid; gap: 4px; justify-items: center; }
+.frame canvas { width: 100%; max-width: 144px; height: auto; image-rendering: pixelated; background: var(--ground); border: 1px solid var(--line); border-radius: 6px; }
+.frame small { color: var(--mute); font-size: 12px; font-family: ui-monospace, Menlo, monospace; }
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 24px; margin-top: 22px; }
+.notes div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; font-size: 14px; color: var(--mute); }
+.notes b { display: block; color: var(--ink); font-weight: 700; margin-bottom: 4px; }
+@media (max-width: 820px) { .studio { grid-template-columns: 1fr } .tiers { grid-template-columns: repeat(3, minmax(0, 1fr)) } }
+@media (prefers-reduced-motion: reduce) { .auto-play { display: none } }
+</style>
+
+<div class="wrap">
+<header>
+  <a class="crumb" href="index.html">← Kaneed Dungeon Gallery</a>
+  <h1>Kaneed Dress-up</h1>
+  <p class="lede">主人公カニードの <b>5 部位 × 5 段階</b> の装備レイヤーを本体コマの上に重ねて確認する。合成の手順（描画順・コマごとの部位オフセット・xterm-256 への丸め）はゲーム本体と同じ。</p>
+</header>
+
+<section class="studio">
+  <div>
+    <div class="stage">
+      <div class="bar"><span></span><span></span><span></span><em>kaneed-dungeon · <b id="pose-name">待機</b> · <span id="frame-name">idle_0</span></em></div>
+      <canvas id="stage" width="240" height="208" aria-label="装備を重ねたカニードのスプライト"></canvas>
+      <div class="poses" role="group" aria-label="ポーズ">
+        <button class="chip" data-pose="idle" aria-pressed="true">待機</button>
+        <button class="chip" data-pose="walk" aria-pressed="false">歩く</button>
+        <button class="chip" data-pose="attack" aria-pressed="false">攻撃</button>
+        <button class="chip" data-pose="hurt" aria-pressed="false">被弾</button>
+        <button class="chip" data-pose="victory" aria-pressed="false">勝利</button>
+        <button class="chip" data-pose="dead" aria-pressed="false">死亡</button>
+      </div>
+      <div class="poses" role="group" aria-label="主人公" style="border-top:0;padding-top:0">
+        <span class="eyebrow" style="align-self:center;margin-right:4px">Hero</span>
+        <button class="chip hero-chip" data-hero="kaneed" aria-pressed="true">カニード（11 コマ）</button>
+        <button class="chip hero-chip" data-hero="fallback" aria-pressed="false">予備スプライト（1 コマ）</button>
+      </div>
+      <div class="stepper">
+        <button id="prev" type="button" aria-label="前のコマ">◀</button>
+        <code id="frame-idx">1 / 8</code>
+        <button id="next" type="button" aria-label="次のコマ">▶</button>
+        <button id="play" type="button" class="auto-play" aria-pressed="true">再生中</button>
+        <label class="toggle"><input type="checkbox" id="snap" checked> 256 色に丸める</label>
+      </div>
+    </div>
+    <div class="presets" style="margin-top:14px">
+      <button class="preset" data-preset="none">全部外す</button>
+      <button class="preset" data-preset="t1">初期装備（T1 一式）</button>
+      <button class="preset" data-preset="wizard">魔法使いセット</button>
+      <button class="preset" data-preset="t5">最強（T5 一式）</button>
+      <button class="preset" data-preset="random">ランダム</button>
+    </div>
+  </div>
+  <div class="slots" id="slots"></div>
+</section>
+
+<section class="sheet">
+  <div class="eyebrow">Sheet</div>
+  <h2>いまの装備で全コマ</h2>
+  <div class="frames" id="frames"></div>
+  <div class="notes">
+    <div><b>描画順</b>靴 → 本体 → 盾 → 剣 → 帽子 → アイウェア。帽子とアイウェアが最前面なので、目の茎は帽子のつばを突き抜けて上に出る。</div>
+    <div><b>アンカー</b>主人公は <code>anchors.json</code> に「頭・目・左手・右手・足」の 5 点をコマごとに持ち、各装備レイヤーはどの点にぶら下がるかを宣言する。呼吸で甲羅だけ沈む、被弾で目の茎だけ倒れる、攻撃で大バサミだけ前に出る、といった動きに装備が追従するのはこのため。</div>
+    <div><b>主人公の差し替え</b>24×16 のコマ絵と <code>anchors.json</code> を置けば、同じ 25 枚の装備がそのまま乗る。上の「予備スプライト」は 1 コマ + 5 点のアンカーだけで着せている例。目の間隔が違う絵ではアイウェアがずれるので、その場合は自分の <code>equip/</code> を用意して上書きする。</div>
+    <div><b>256 色</b>ゲームは描画直前に全色を xterm-256（6×6×6 立方体 + 24 段グレー）へ丸める。このページの「256 色に丸める」は同じ計算で、外すと元 PNG の色になる。</div>
+    <div><b>足元</b>全 11 コマとも最下段が 14 行目。舞台の床線（茶色）はその 1 段下にある。</div>
+  </div>
+</section>
+</div>
+
+<script>
+/*DATA*/
+const SLOTS = ['hat', 'eyewear', 'shield', 'sword', 'boots'];
+const SLOT_LABEL = { hat: '帽子', eyewear: 'アイウェア', shield: '盾', sword: '剣', boots: '足装備' };
+const TIER_NAMES = {
+  hat: ['布の帽子', '革の帽子', '魔法使いのとんがり帽子', 'ミスリルの兜', '竜鱗の兜'],
+  eyewear: ['丸メガネ', 'ゴーグル', '単眼鏡', '賢者のモノクル', '真実のモノクル'],
+  shield: ['木の盾', '魔法障壁の護符', '鉄の盾', 'ミスリルの盾', '竜鱗の盾'],
+  sword: ['木の剣', '銅の剣', '鉄の剣', '魔導師の杖', '竜殺しの剣'],
+  boots: ['布の靴', '革のブーツ', '鉄のグリーブ', 'ミスリルのブーツ', '魔法使いの空飛ぶ靴'],
+};
+const ORDER = ['boots', 'shield', 'sword', 'hat', 'eyewear'];
+const POSES = {
+  idle: { label: '待機', frames: ['idle_0', 'idle_1', 'idle_0', 'idle_glance', 'idle_0', 'idle_0', 'idle_blink', 'idle_0'], ms: 800 },
+  walk: { label: '歩く', frames: ['walk_0', 'walk_1'], ms: 300 },
+  attack: { label: '攻撃', frames: ['idle_0', 'attack_0', 'attack_1', 'attack_1'], ms: 220 },
+  hurt: { label: '被弾', frames: ['hurt', 'idle_0'], ms: 400 },
+  victory: { label: '勝利', frames: ['victory'], ms: 1000 },
+  dead: { label: '死亡', frames: ['dead'], ms: 1000 },
+};
+const ALL_FRAMES = ['idle_0', 'idle_1', 'idle_glance', 'idle_blink', 'walk_0', 'walk_1', 'attack_0', 'attack_1', 'hurt', 'victory', 'dead'];
+const W = 24, H = 16;
+
+// same rounding as tools/sprites/make_sprites.py: nearest xterm-256 colour, cube channels as
+// multiples of 51 so the terminal renderer lands on exactly that palette entry
+const CUBE = [0, 95, 135, 175, 215, 255];
+const GREYS = Array.from({ length: 24 }, (_, i) => 8 + 10 * i);
+function snap256(r, g, b) {
+  const lv = [r, g, b].map(v => CUBE.reduce((bi, c, i) => Math.abs(c - v) < Math.abs(CUBE[bi] - v) ? i : bi, 0));
+  const cube = lv.map(i => CUBE[i]);
+  const avg = (r + g + b) / 3;
+  const gk = GREYS.reduce((bi, c, i) => Math.abs(c - avg) < Math.abs(GREYS[bi] - avg) ? i : bi, 0);
+  const grey = [GREYS[gk], GREYS[gk], GREYS[gk]];
+  const d = c => (c[0] - r) ** 2 + (c[1] - g) ** 2 + (c[2] - b) ** 2;
+  return d(cube) <= d(grey) ? lv.map(i => i * 51) : grey;
+}
+
+const images = {};
+function load(key, src) {
+  return new Promise(res => { const im = new Image(); im.onload = () => { images[key] = im; res(); }; im.src = src; });
+}
+
+const gear = { hat: 0, eyewear: 0, shield: 0, sword: 0, boots: 0 };
+let pose = 'idle', idx = 0, playing = true, snap = true, timer = null, hero = 'kaneed';
+const PAD = 8; // rows of headroom above the 24x16 canvas, so a hat on a full-height hero shows
+const HEROES = {
+  kaneed: { frames: FRAMES, anchors: KANEED_ANCHORS },
+  fallback: { frames: { idle_0: FALLBACK_PNG }, anchors: FALLBACK_ANCHORS },
+};
+function heroFrame(frame) {
+  const h = HEROES[hero];
+  return h.frames[frame] ? frame : 'idle_0';  // a hero with fewer frames falls back to idle_0
+}
+function anchorOf(frame, key) {
+  const a = HEROES[hero].anchors;
+  return (a.frames && a.frames[frame] && a.frames[frame][key]) || a.default[key];
+}
+
+function compose(frame) {
+  frame = heroFrame(frame);
+  const c = document.createElement('canvas'); c.width = W; c.height = H + PAD;
+  const g = c.getContext('2d'); g.imageSmoothingEnabled = false;
+  g.drawImage(images[hero + ':' + frame], 0, PAD);
+  // each layer hangs from a named anchor: shift it so the layer's anchor meets the hero's
+  for (const slot of ORDER) {
+    const t = gear[slot]; if (!t) continue;
+    const key = slot + '_' + t, ea = EQUIP_ANCHORS[key];
+    const [ax, ay] = anchorOf(frame, ea.anchor), [lx, ly] = ea.at;
+    g.drawImage(images['equip:' + key], ax - lx, ay - ly + PAD);
+  }
+  if (snap) {
+    const id = g.getImageData(0, 0, W, H + PAD), p = id.data;
+    for (let i = 0; i < p.length; i += 4) {
+      if (!p[i + 3]) continue;
+      const [r, gg, b] = snap256(p[i], p[i + 1], p[i + 2]); p[i] = r; p[i + 1] = gg; p[i + 2] = b;
+    }
+    g.putImageData(id, 0, 0);
+  }
+  return c;
+}
+
+function drawStage() {
+  const frame = POSES[pose].frames[idx];
+  const cv = document.getElementById('stage'), g = cv.getContext('2d');
+  const S = 8, ox = (cv.width - W * S) / 2, oy = 0;  // composed canvas already carries PAD rows of headroom
+  g.imageSmoothingEnabled = false;
+  g.fillStyle = '#14110E'; g.fillRect(0, 0, cv.width, cv.height);
+  // floor: one row of sand under the ground row, then earth
+  g.fillStyle = '#6B4A2B'; g.fillRect(0, oy + (PAD + 15) * S, cv.width, S);
+  g.fillStyle = '#4A3320'; g.fillRect(0, oy + (PAD + 16) * S, cv.width, cv.height);
+  g.drawImage(compose(frame), ox, oy, W * S, (H + PAD) * S);
+  document.getElementById('frame-name').textContent = heroFrame(frame);
+  document.getElementById('pose-name').textContent = POSES[pose].label;
+  document.getElementById('frame-idx').textContent = (idx + 1) + ' / ' + POSES[pose].frames.length;
+}
+
+function drawSheet() {
+  const box = document.getElementById('frames');
+  for (const frame of ALL_FRAMES) {
+    let el = box.querySelector('[data-frame="' + frame + '"]');
+    if (!el) {
+      el = document.createElement('div'); el.className = 'frame'; el.dataset.frame = frame;
+      el.innerHTML = '<canvas width="' + W + '" height="' + (H + PAD) + '"></canvas><small>' + frame + '</small>';
+      box.appendChild(el);
+    }
+    const g = el.querySelector('canvas').getContext('2d');
+    g.clearRect(0, 0, W, H + PAD); g.drawImage(compose(frame), 0, 0);
+  }
+}
+
+function drawThumbs() {
+  for (const slot of SLOTS) for (let t = 0; t <= 5; t++) {
+    const cv = document.getElementById('thumb-' + slot + '-' + t), g = cv.getContext('2d');
+    const saved = gear[slot]; gear[slot] = t;
+    g.clearRect(0, 0, W, H + PAD); g.drawImage(compose('idle_0'), 0, 0);
+    gear[slot] = saved;
+  }
+}
+
+function refresh() { drawStage(); drawSheet(); syncButtons(); }
+function syncButtons() {
+  for (const b of document.querySelectorAll('.tier')) b.setAttribute('aria-pressed', String(gear[b.dataset.slot] === Number(b.dataset.tier)));
+  for (const b of document.querySelectorAll('.chip')) b.setAttribute('aria-pressed', String(b.dataset.pose === pose));
+}
+
+function schedule() {
+  clearTimeout(timer);
+  if (!playing) return;
+  timer = setTimeout(() => { idx = (idx + 1) % POSES[pose].frames.length; drawStage(); schedule(); }, POSES[pose].ms);
+}
+
+function buildSlots() {
+  const box = document.getElementById('slots');
+  for (const slot of SLOTS) {
+    const el = document.createElement('div'); el.className = 'slot';
+    let html = '<div class="slot-head"><b>' + SLOT_LABEL[slot] + '</b><span id="cur-' + slot + '"></span></div><div class="tiers" role="group" aria-label="' + SLOT_LABEL[slot] + '">';
+    for (let t = 0; t <= 5; t++) {
+      html += '<button class="tier" type="button" data-slot="' + slot + '" data-tier="' + t + '" aria-pressed="false">'
+        + '<canvas id="thumb-' + slot + '-' + t + '" width="' + W + '" height="' + (H + PAD) + '"></canvas>'
+        + '<small>' + (t ? 'T' + t : '—') + '</small>' + (t ? TIER_NAMES[slot][t - 1] : 'なし') + '</button>';
+    }
+    el.innerHTML = html + '</div>';
+    box.appendChild(el);
+  }
+  box.addEventListener('click', e => {
+    const b = e.target.closest('.tier'); if (!b) return;
+    gear[b.dataset.slot] = Number(b.dataset.tier); refresh(); updateCur();
+  });
+}
+function updateCur() {
+  for (const slot of SLOTS) document.getElementById('cur-' + slot).textContent = gear[slot] ? TIER_NAMES[slot][gear[slot] - 1] : 'なし';
+}
+
+const PRESETS = {
+  none: { hat: 0, eyewear: 0, shield: 0, sword: 0, boots: 0 },
+  t1: { hat: 1, eyewear: 1, shield: 1, sword: 1, boots: 1 },
+  wizard: { hat: 3, eyewear: 4, shield: 2, sword: 4, boots: 5 },
+  t5: { hat: 5, eyewear: 5, shield: 5, sword: 5, boots: 5 },
+};
+
+async function start() {
+  const jobs = [];
+  for (const f of ALL_FRAMES) jobs.push(load('kaneed:' + f, FRAMES[f]));
+  jobs.push(load('fallback:idle_0', FALLBACK_PNG));
+  for (const k in EQUIP) jobs.push(load('equip:' + k, EQUIP[k]));
+  await Promise.all(jobs);
+  buildSlots(); drawThumbs(); Object.assign(gear, PRESETS.t1); updateCur(); refresh(); schedule();
+
+  document.querySelector('.poses').addEventListener('click', e => {
+    const b = e.target.closest('.chip'); if (!b) return;
+    pose = b.dataset.pose; idx = 0; refresh(); schedule();
+  });
+  document.querySelector('[aria-label="主人公"]').addEventListener('click', e => {
+    const b = e.target.closest('.hero-chip'); if (!b) return;
+    hero = b.dataset.hero; idx = 0;
+    for (const c of document.querySelectorAll('.hero-chip')) c.setAttribute('aria-pressed', String(c === b));
+    drawThumbs(); refresh();
+  });
+  document.getElementById('prev').onclick = () => { idx = (idx - 1 + POSES[pose].frames.length) % POSES[pose].frames.length; drawStage(); };
+  document.getElementById('next').onclick = () => { idx = (idx + 1) % POSES[pose].frames.length; drawStage(); };
+  const play = document.getElementById('play');
+  play.onclick = () => { playing = !playing; play.textContent = playing ? '再生中' : '停止中'; play.setAttribute('aria-pressed', String(playing)); schedule(); };
+  document.getElementById('snap').onchange = e => { snap = e.target.checked; drawThumbs(); refresh(); };
+  document.querySelector('.presets').addEventListener('click', e => {
+    const b = e.target.closest('.preset'); if (!b) return;
+    if (b.dataset.preset === 'random') for (const s of SLOTS) gear[s] = Math.floor(Math.random() * 6);
+    else Object.assign(gear, PRESETS[b.dataset.preset]);
+    updateCur(); refresh();
+  });
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { playing = false; clearTimeout(timer); }
+}
+start();
+</script>
