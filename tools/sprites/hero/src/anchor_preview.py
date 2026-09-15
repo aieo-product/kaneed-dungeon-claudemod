@@ -42,4 +42,4 @@ if __name__ == '__main__':
     for j, (body, an) in enumerate(((kan, ka), (fb, fa))):
         for i, g in enumerate(sets):
             pv.alpha_composite(wear(body, an, g).resize((24 * S, TH * S), Image.NEAREST), (8 + i * (24 * S + 8), 8 + j * (TH * S + 8)))
-    pv.save(SPR / 'hero/preview_anchors_x6.png'); pv.save(str(SPR / 'hero' / 'preview_anchors_x6.png')); print('ok')
+    pv.save(SPR / 'hero/preview_anchors_x6.png'); print('ok')
