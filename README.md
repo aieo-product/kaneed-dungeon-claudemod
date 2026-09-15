@@ -16,6 +16,32 @@ Claude が考えている間、カニード がプロンプトの上でダンジ
 
 ![攻撃の瞬間: 敵が赤く光り、ダメージ数字が出る](docs/fight.png)
 
+## 主人公を自作して遊ぶ
+
+主人公は差し替え前提で作ってある。24×16 のドット絵を 1 枚描いて置くだけで、既存の装備 25 枚（帽子・アイウェア・盾・剣・足装備 × 5 段階）がそのまま乗る。
+
+1. `tools/sprites/hero/idle_0.png`（24×16、RGBA 透過、足元を 14 行目に揃える）を描く。色は自由（描くときに 256 色へ丸められる）。
+2. `tools/sprites/hero/anchors.json` に主人公の 5 点を書く。装備はこの点に合わせて乗る。
+
+   ```json
+   {
+     "slots": {"hat": "hat", "eyewear": "eyes", "shield": "hand_l", "sword": "hand_r", "boots": "feet"},
+     "default": {"hat": [10, 5], "eyes": [10, 2], "hand_l": [2, 7], "hand_r": [22, 7], "feet": [10, 12]},
+     "frames": {}
+   }
+   ```
+
+   `hat` は頭の上、`eyes` は両目の中間、`hand_l` / `hand_r` は左右の手、`feet` は足元。座標は画像の左上が (0, 0)。
+3. 生成して再起動する。
+
+   ```sh
+   python3 tools/sprites/make_sprites.py hooks/boards/sprites.ts
+   ```
+
+コマ絵を増やすと動きが付く: `idle_1`（呼吸）、`idle_glance`（チラ見）、`idle_blink`（まばたき）、`walk_0` / `walk_1`（歩行）、`attack_0` / `attack_1`（踏み込み）、`hurt`（被弾）、`dead`（死亡）、`victory`（勝利）。無いコマは `idle_0` で代用される。コマで体が動くなら `anchors.json` の `frames` にそのコマの点を上書きで書く（例: `"idle_1": {"hat": [10, 6]}`）。目の間隔が違う絵ではアイウェアだけ合わないことがあるので、その場合は `tools/sprites/hero/equip/` に自分のレイヤーを置いて上書きする。
+
+今入っているカニードは一例で、生成元は `tools/sprites/hero/src/`。`hero/` を丸ごと消すと無地のプレースホルダーが主人公になる。
+
 ## 必要なもの
 
 - Claude Code 2.1.269 以降、`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` を設定した状態（早期アクセス機能。API は予告なく変わる可能性がある）。
@@ -147,11 +173,6 @@ python3 tools/sprites/make_sprites.py hooks/boards/sprites.ts
 - 公式 built-in mods のソースと型定義: https://github.com/anthropics/claude-code/tree/main/mods
 - 先行事例 cc-arcade（描画の作法を参考にした）: https://github.com/sezaakgun/cc-arcade
 
-## 権利上の注意
-
-- `tools/sprites/fallback_pixel.png` は Anthropic の公式マスコット Clawd のドット絵を採寸したもので、hero フォルダが無いときのフォールバック専用。Clawd の権利は Anthropic に帰属し、このリポジトリは Anthropic と無関係の非公式ファン作品である。公開配布する場合は Anthropic のブランドガイドラインを確認するか、このファイルを差し替えること。
-- 敵の元絵は higgsfield MCP（GPT Image 2.5）で生成したもの。主人公カニードは別セッションで作成した独自キャラクターで、正典は `tools/sprites/hero/src/`（`kaneed24.py` / `hero_export.py`）。PNG と `frames.json` は生成物なので直接編集しない（手順は「スプライトの作り方」）。
-
 ## ライセンス
 
-MIT（`LICENSE`）。上記のフォールバック画像はライセンスの対象外。
+MIT（`LICENSE`）。
