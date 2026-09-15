@@ -74,7 +74,8 @@ def shrink(im, height, colors):
     while out and all(r[-1] is None for r in out): out = [r[:-1] for r in out]
     return out
 
-# the fallback hero is the official Clawd 12x8 pixel figure (tools/sprites/fallback_pixel.png), doubled with no filtering
+# the fallback hero: a neutral placeholder figure (tools/sprites/fallback_pixel.png) used when hero/ is absent;
+# a small figure (<= 10 px tall) is doubled, a full-size one is used as is
 def exact(path, scale):
     im = Image.open(path).convert('RGBA')
     im = im.resize((im.width * scale, im.height * scale), Image.NEAREST)
