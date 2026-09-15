@@ -1,4 +1,4 @@
-"""Hand-built 24x16 sprites of Kaneed (fiddler crab hero), same footprint as Clawd (24x16).
+"""Hand-built 24x16 sprites of Kaneed (fiddler crab hero), on the game's 24x16 hero canvas.
 
 Design rules (from the approved concept):
 - no eyes on the body; two stalk eyes on top + mouth carry the emotion
