@@ -1,8 +1,9 @@
 /* @jsx h */
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 import { testEvent } from './game/detect.ts'
-import { isHero, type Hero } from './game/hero.ts'
+import { isHero, stats, type Hero } from './game/hero.ts'
 import type { RunSummary } from './game/sim.ts'
+import { countEvent, countTool, dash, newTelemetry, recordContext, recordHero, recordTurn } from './game/telemetry.ts'
 
 // The hooks module. It owns what outlives a session: Kaneed's sheet, the run number, the floor,
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
@@ -10,8 +11,11 @@ import type { RunSummary } from './game/sim.ts'
 //
 // Kaneed explores while a model turn is running, and rests while Claude waits for you. Heals come
 // from two places only: a level up, and a test run of Claude's that passed (seen on tool.call).
+//
+// It also keeps this session's telemetry (./game/telemetry.ts) for the dashboard tab: every event
+// it catches, the tokens each turn spent, and Kaneed's progress at each save. Memory only.
 
-type View = 'dash' | 'status' | 'log'
+type View = 'game' | 'dash' | 'status' | 'log'
 type Save = { type: 'save'; hero: Hero; floorNum: number; log: string[]; dead?: RunSummary | null; levels?: number }
 
 const LOG_KEEP = 300
@@ -25,7 +29,8 @@ let hall: RunSummary[] = []
 let seed = 1
 let heals = 0
 let fails = 0
-let view: View = 'dash'
+let view: View = 'game'
+let tele = newTelemetry(0)
 let visible = true
 let saving = false
 let working = false
@@ -34,6 +39,12 @@ let working = false
 let ready = false
 
 const isSave = (v: unknown): v is Save => typeof v === 'object' && v !== null && (v as Save).type === 'save' && isHero((v as Save).hero)
+
+// the cost and context fill, as the status line has them (the plain call is free)
+async function refreshUsage($: EngineInterface) {
+  const usage = await $.session.usage().catch(err => { $.ui.log(`kaneed-dungeon: session.usage failed: ${err}`); return undefined })
+  if (usage) recordContext(tele, usage)
+}
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -47,13 +58,16 @@ export const register: Register = on => {
     history = Array.isArray(savedLog) ? savedLog.filter((l): l is string => typeof l === 'string') : []
     const savedHall = await stored('hall')
     hall = Array.isArray(savedHall) ? (savedHall as RunSummary[]) : []
-    seed = (await $.clock.now()) >>> 0
+    const now = await $.clock.now()
+    seed = now >>> 0
+    tele = newTelemetry(now)
+    await refreshUsage($)
     ready = true
     $.ui.invalidate('ui.render')
     await $.command.register({
       name: 'kaneed',
-      description: 'カニード のダンジョン探索: ダッシュボード / status / log / hide / show (kaneed-dungeon)',
-      argumentHint: '[status | log | hide | show]',
+      description: 'カニード のダンジョン探索: ゲーム画面 / dash / status / log / hide / show (kaneed-dungeon)',
+      argumentHint: '[dash | status | log | hide | show]',
       immediate: true,
     }).catch(err => $.ui.log(`kaneed-dungeon: /kaneed not registered: ${err}`))
     return r
@@ -69,7 +83,10 @@ export const register: Register = on => {
     visible = true
     if (arg === 'status' || arg === 'st') view = 'status'
     else if (arg === 'log' || arg === 'history') view = 'log'
-    else view = 'dash'
+    else if (arg === 'dash' || arg === 'dashboard' || arg === 'stats') {
+      view = 'dash'
+      await refreshUsage($)
+    } else view = 'game'
     $.ui.invalidate('ui.render')
     const lv = hero ? `Lv ${hero.lv} · HP ${hero.hp}` : 'Lv 1'
     return { text: `カニード · 冒険 #${run} · B${floorNum}F · ${lv} · 上のボタンで表示を切り替え · /kaneed hide で閉じる` }
@@ -78,20 +95,38 @@ export const register: Register = on => {
   // the band's isWorking prop changes with the turn; a redraw carries it to the board
   on('turn.start', async ($, e, next) => {
     working = true
+    countEvent(tele, 'ターン開始', await $.clock.now())
     $.ui.invalidate('ui.render')
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    working = false
+    recordTurn(tele, e.usage, e.durationMs, e.agentId, await $.clock.now())
+    // a subagent's turn ending is not the main turn ending
+    if (e.agentId === undefined) {
+      working = false
+      await refreshUsage($)
+    }
     $.ui.invalidate('ui.render')
     return r
+  })
+
+  // counted for the dashboard only: each passes straight on
+  on('prompt.submit', async ($, e, next) => {
+    countEvent(tele, 'プロンプト', await $.clock.now())
+    return next(e)
+  })
+  on('skill.prompt', async ($, e, next) => {
+    countEvent(tele, 'スキル', await $.clock.now())
+    return next(e)
   })
 
   // a compaction rebuilds the floor: a new seed reaches the board with the next props
   on('session.compact', async ($, e, next) => {
     const r = await next(e)
-    seed = ((await $.clock.now()) ^ 0x5bd1e995) >>> 0
+    const now = await $.clock.now()
+    seed = (now ^ 0x5bd1e995) >>> 0
+    countEvent(tele, '圧縮', now)
     $.ui.invalidate('ui.render')
     return r
   })
@@ -99,12 +134,14 @@ export const register: Register = on => {
   // a passing test run is the one heal Claude can give Kaneed
   on('tool.call', async ($, e, next) => {
     const r = await next(e)
+    const now = await $.clock.now()
+    countTool(tele, e.tool, now)
     const command = (e as { command?: unknown }).command
     const event = testEvent(e.tool, typeof command === 'string' ? command : undefined, 'deny' in r ? undefined : !r.isError)
-    if (!event) return r
     if (event === 'pass') heals++
-    else fails++
-    $.ui.invalidate('ui.render')
+    else if (event === 'fail') fails++
+    if (event) countEvent(tele, event === 'pass' ? 'テスト成功' : 'テスト失敗', now)
+    if (event || view === 'dash') $.ui.invalidate('ui.render')
     return r
   })
 
@@ -117,6 +154,7 @@ export const register: Register = on => {
     run = data.hero.run
     if (data.log.length) history = [...history, ...data.log].slice(-LOG_KEEP)
     if (data.dead) hall = [...hall, data.dead].slice(-HALL_KEEP)
+    recordHero(tele, { hero, floor: floorNum, maxHp: stats(hero).maxHp, log: data.log, died: !!data.dead, levels: data.levels ?? 0 }, await $.clock.now())
     if (data.levels) $.ui.toast(`カニード が Lv ${hero.lv} になった！HP ${hero.hp} まで回復`)
     if (data.dead) $.ui.toast(`カニード は ${data.dead.killedBy} に倒された… 冒険 #${data.dead.run} は Lv ${data.dead.lv}、B${data.dead.floor}F で終わった`)
     if (!saving) {
@@ -128,7 +166,8 @@ export const register: Register = on => {
     return { props: props() }
   })
 
-  const props = () => ({ view, working, seed, saved: hero, run, floorNum, heals, fails, history: history.slice(-40), hall: hall.slice(-8) })
+  const props = () => ({ view, working, seed, saved: hero, run, floorNum, heals, fails, history: history.slice(-40), hall: hall.slice(-8), ...(view === 'dash' ? { dash: dash(tele) } : {}) })
+  // (a Client's props are plain data: a key holding undefined is refused, so the dashboard's is left out)
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (!ready || !visible || e.props.hasSurvey || e.surface !== 'terminal') return next(e)
@@ -137,8 +176,9 @@ export const register: Register = on => {
     const cols = e.props.bodyColumns ?? e.viewport?.columns ?? 80
     // the stage wants every row it can get: sprites shrink to fit a short band
     const rows = Math.max(9, Math.min(22, e.props.maxRows - 1))
-    const pick = (v: View) => () => {
+    const pick = (v: View) => async () => {
       view = v
+      if (v === 'dash') await refreshUsage($)
       $.ui.invalidate('ui.render')
     }
     const close = () => {
@@ -149,6 +189,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" columnGap={1}>
+          {tab('game', 'ゲーム画面')}
           {tab('dash', 'ダッシュボード')}
           {tab('status', 'ステータス')}
           {tab('log', '履歴')}
