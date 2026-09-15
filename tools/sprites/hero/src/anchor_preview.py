@@ -1,9 +1,14 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pillow", "numpy"]
+# ///
 """Preview: Kaneed and the fallback hero wearing the same 25 layers, placed by anchors only."""
 import json
 from pathlib import Path
 from PIL import Image
 import hero_export as HE
-SPR = Path('/Volumes/AIWorkSSD/AIWorkSpace/github/otani-side/kaneed-dungeon/tools/sprites')
+# tools/sprites, relative to this file (…/tools/sprites/hero/src)
+SPR = Path(__file__).resolve().parents[2]
 EQ = json.loads((SPR / 'hero/equip/anchors.json').read_text())
 PAD = 8  # room above the 24x16 canvas so hats on a full-height hero are visible
 
