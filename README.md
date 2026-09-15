@@ -111,7 +111,7 @@ bunx -p typescript tsc -p .
 
    ```sh
    # 1. hero/src/kaneed24.py を編集
-   python3 tools/sprites/hero/src/hero_export.py .      # 2. PNG と frames.json を書き出す（引数はリポジトリのパス。省略時は作成環境の絶対パス）
+   uv run tools/sprites/hero/src/hero_export.py .       # 2. PNG・frames.json・preview_equip_x6.png を書き出す（Pillow と numpy はスクリプト冒頭の PEP 723 依存で uv が用意。引数はリポジトリのパス、省略時はスクリプト位置から推定）
    python3 tools/sprites/make_sprites.py hooks/boards/sprites.ts   # 3. スプライトデータを再生成
    bunx -p typescript tsc -p .                          # 4. 型チェック
    ```
