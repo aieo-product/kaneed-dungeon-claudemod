@@ -7,6 +7,8 @@ import { idx, T, tileAt } from '../game/map.ts'
 import { rebuildFloor, startRun, step, takeEvents, takeFresh, testFailed, testPassed, type GameEvent, type RunSummary, type State } from '../game/sim.ts'
 import { EQUIP_ANCHORS, FALLBACK_ANCHORS, HERO_ANCHORS, HERO_OFFSETS, SPRITES, type Pixels } from './sprites.ts'
 import { layerOffset } from './anchors.ts'
+import { compact, duration, hbar, padCells, signed, spark } from '../game/charts.ts'
+import type { Dash } from '../game/telemetry.ts'
 
 // The board: a surface module on the drawing thread. The dungeon is simulated in ticks of half a
 // second (../game/sim.ts); this file turns each tick's events into a side-scrolling scene drawn ten
@@ -20,7 +22,7 @@ import { layerOffset } from './anchors.ts'
 // Never name a local `h` in this file: every JSX tag compiles to a call of `h`.
 
 type Props = {
-  view?: 'dash' | 'status' | 'log'
+  view?: 'game' | 'dash' | 'status' | 'log'
   working?: boolean
   seed?: number
   saved?: Hero | null
@@ -30,6 +32,7 @@ type Props = {
   fails?: number
   history?: string[]
   hall?: RunSummary[]
+  dash?: Dash
 } | undefined
 
 const FRAME_MS = 100
@@ -384,6 +387,7 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
 
   if (props?.view === 'status') return statusView(s, header, Box, Text)
   if (props?.view === 'log') return logView(s, props, header, rows, Box, Text)
+  if (props?.view === 'dash') return dashView(s, props.dash, header, cols, rows, Box, Text)
 
   // ---- the stage ----
   const stageRows = rows - 2
@@ -757,6 +761,134 @@ function logView(s: Local, props: Props, header: RenderElement, rows: number, Bo
       {lines.map(line => <Text wrap="truncate-end" dimColor={!/成功|レベルアップ|倒された|宝箱|手に入れ/.test(line)} color={/倒された/.test(line) ? 'red' : /成功|レベルアップ/.test(line) ? 'green' : /宝箱|手に入れ/.test(line) ? 'yellow' : undefined}>{`· ${line}`}</Text>)}
       {hallLines.length ? <Text bold dimColor>{'── これまでの冒険 ──'}</Text> : null}
       {hallLines.map(line => <Text dimColor wrap="truncate-end">{line}</Text>)}
+    </Box>
+  )
+}
+
+// ---- the dashboard: this session in charts ----
+// Three sections, each a list of lines in the order they matter: Claude's tokens, the events the
+// hooks module caught, and Kaneed's progress. Wide bands put them side by side; narrow ones stack
+// them and give each a share of the rows.
+
+const LABEL_W = 11
+const VALUE_W = 10
+
+type Els = { Box: ClientElements['Box']; Text: ClientElements['Text'] }
+
+// label, sparkline, value: one chart row that fits `w` cells
+function chartLine({ Text }: Els, w: number, label: string, line: string, value: string, color: string) {
+  return (
+    <Text wrap="truncate-end">
+      <Text dimColor>{padCells(label, LABEL_W)}</Text>
+      <Text color={color}>{line}</Text>
+      <Text bold>{' ' + padCells(value, VALUE_W - 1)}</Text>
+    </Text>
+  )
+}
+
+const title = ({ Text }: Els, text: string, color: string, note = '') => (
+  <Text wrap="truncate-end">
+    <Text color={color} bold>{`▌${text}`}</Text>
+    <Text dimColor>{note ? `  ${note}` : ''}</Text>
+  </Text>
+)
+
+function tokenSection(els: Els, d: Dash, w: number): RenderElement[] {
+  const { Text } = els
+  const sw = Math.max(4, w - LABEL_W - VALUE_W)
+  const t = d.totals
+  const all = t.input + t.output + t.cacheRead + t.cacheWrite
+  const ctx = d.context
+  const notes = [`計 ${compact(all)}`, ctx.usd !== null ? `$${ctx.usd.toFixed(2)}` : '', ctx.percent !== null ? `コンテキスト ${Math.round(ctx.percent)}%` : ''].filter(Boolean).join('  ')
+  const series = (k: 'input' | 'output' | 'cacheRead' | 'cacheWrite') => d.turns.map(p => p[k])
+  const lines = [
+    title(els, 'トークン', 'cyan', notes),
+    chartLine(els, w, '出力', spark(series('output'), sw), compact(t.output), 'magenta'),
+    chartLine(els, w, '入力', spark(series('input'), sw), compact(t.input), 'cyan'),
+    chartLine(els, w, 'Cache 読込', spark(series('cacheRead'), sw), compact(t.cacheRead), 'blue'),
+    chartLine(els, w, 'Cache 作成', spark(series('cacheWrite'), sw), compact(t.cacheWrite), 'yellow'),
+  ]
+  if (ctx.percent !== null) lines.push(chartLine(els, w, 'Context', hbar(ctx.percent, 100, sw), `${Math.round(ctx.percent)}%`, ctx.percent >= 85 ? 'red' : ctx.percent >= 60 ? 'yellow' : 'green'))
+  const avgMs = d.turns.length ? d.turns.reduce((a, p) => a + p.ms, 0) / d.turns.length : 0
+  lines.push(<Text dimColor wrap="truncate-end">{`ターン ${d.mainTurns}  サブエージェント ${d.agentCount}（${d.agentTurns} ターン）  平均 ${duration(avgMs)}`}</Text>)
+  if (!d.turns.length) lines.splice(1, 0, <Text dimColor wrap="truncate-end">{'  ターンが終わるとグラフが伸びる（1 本 = 1 ターン）'}</Text>)
+  return lines
+}
+
+function eventSection(els: Els, d: Dash, w: number): RenderElement[] {
+  const { Text } = els
+  const sw = Math.max(4, w - LABEL_W - VALUE_W)
+  const total = Object.values(d.events).reduce((a, n) => a + n, 0)
+  const lines = [
+    title(els, 'イベント', 'green', `計 ${total}`),
+    chartLine(els, w, '毎分', spark(d.perMinute, sw), `${d.perMinute[d.perMinute.length - 1] ?? 0}/分`, 'green'),
+  ]
+  const kinds = Object.entries(d.events).sort((a, b) => b[1] - a[1])
+  const tools = Object.entries(d.tools).sort((a, b) => b[1] - a[1])
+  const max = Math.max(1, ...kinds.map(k => k[1]), ...tools.map(k => k[1]))
+  const color = (label: string) => (label === 'テスト失敗' ? 'red' : label === 'テスト成功' ? 'greenBright' : label === '圧縮' ? 'yellow' : 'green')
+  for (const [label, n] of kinds) lines.push(chartLine(els, w, label, hbar(n, max, sw), String(n), color(label)))
+  if (tools.length) lines.push(<Text dimColor wrap="truncate-end">{'  ツール内訳'}</Text>)
+  for (const [label, n] of tools) lines.push(chartLine(els, w, ` ${label}`, hbar(n, max, sw), String(n), 'blueBright'))
+  if (!kinds.length) lines.push(<Text dimColor wrap="truncate-end">{'  まだイベントはない'}</Text>)
+  return lines
+}
+
+function gameSection(els: Els, s: Local, d: Dash, w: number): RenderElement[] {
+  const { Text } = els
+  const sw = Math.max(4, w - LABEL_W - VALUE_W)
+  const hero = s.sim.hero
+  const st = stats(hero)
+  // the saved samples, then the live sheet as the last point
+  const live = { lv: hero.lv, hp: hero.hp, maxHp: st.maxHp, floor: s.sim.floorNum, gold: hero.gold, kills: d.samples.length ? d.samples[d.samples.length - 1].kills : d.kills }
+  const pts = [...d.samples, live]
+  const first = pts[0]
+  const hpRatio = st.maxHp ? hero.hp / st.maxHp : 0
+  const since = duration(Date.now() - d.startedAt)
+  return [
+    title(els, 'ゲーム進行', HERO_COLOR, `このセッション ${since}  冒険 #${hero.run}`),
+    chartLine(els, w, 'HP', spark(pts.map(p => (p.maxHp ? p.hp / p.maxHp : 0)), sw, { mode: 'mean', min: 0, max: 1 }), `${hero.hp}/${st.maxHp}`, hpRatio <= 0.25 ? 'red' : hpRatio <= 0.5 ? 'yellow' : 'green'),
+    chartLine(els, w, 'Lv', spark(pts.map(p => p.lv), sw, { mode: 'mean' }), `${hero.lv} (${signed(hero.lv - first.lv)})`, 'yellowBright'),
+    chartLine(els, w, '階層', spark(pts.map(p => p.floor), sw, { mode: 'mean' }), `B${s.sim.floorNum}F (${signed(s.sim.floorNum - first.floor)})`, 'cyan'),
+    chartLine(els, w, '討伐', spark(pts.map(p => p.kills), sw, { mode: 'mean' }), `+${d.kills}`, 'redBright'),
+    chartLine(els, w, '所持金', spark(pts.map(p => p.gold), sw, { mode: 'mean' }), `${compact(hero.gold)} G`, 'yellow'),
+    <Text dimColor wrap="truncate-end">{`歩数 +${d.steps}  Lv アップ ${d.levels}  装備入手 ${d.items}  死亡 ${d.deaths}`}</Text>,
+  ]
+}
+
+// sections stacked in one column: each gets an even share of the rows, and what one leaves unused
+// goes to the next that still has lines
+function stack(sections: RenderElement[][], rows: number): RenderElement[] {
+  const share = Math.floor(rows / sections.length)
+  const quota = sections.map(sec => Math.min(sec.length, share))
+  let spare = rows - quota.reduce((a, n) => a + n, 0)
+  for (let i = 0; i < sections.length && spare > 0; i++) {
+    const more = Math.min(spare, sections[i].length - quota[i])
+    quota[i] += more
+    spare -= more
+  }
+  return sections.flatMap((sec, i) => sec.slice(0, quota[i]))
+}
+
+function dashView(s: Local, d: Dash | undefined, header: RenderElement, cols: number, rows: number, Box: ClientElements['Box'], Text: ClientElements['Text']) {
+  if (!d) return <Box flexDirection="column">{header}<Text dimColor>{'集計を読み込み中…'}</Text></Box>
+  const els: Els = { Box, Text }
+  const body = rows - 1
+  const layout = cols >= 132 ? 3 : cols >= 84 ? 2 : 1
+  const gap = 2
+  const w = Math.floor((cols - gap * (layout - 1)) / layout)
+  const tokens = tokenSection(els, d, w)
+  const events = eventSection(els, d, w)
+  const game = gameSection(els, s, d, w)
+  const columns = layout === 3 ? [tokens, events, game].map(sec => sec.slice(0, body))
+    : layout === 2 ? [stack([tokens, events], body), game.slice(0, body)]
+    : [stack([game, tokens, events], body)]
+  return (
+    <Box flexDirection="column">
+      {header}
+      <Box flexDirection="row" columnGap={gap}>
+        {columns.map(lines => <Box flexDirection="column" width={w}>{lines}</Box>)}
+      </Box>
     </Box>
   )
 }
