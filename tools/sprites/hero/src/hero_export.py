@@ -1,4 +1,11 @@
-"""Export the Kaneed hero frames + 25 equipment layers into clawd-dungeon/tools/sprites/hero/.
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pillow", "numpy"]
+# ///
+"""Export the Kaneed hero frames + 25 equipment layers into tools/sprites/hero/.
+
+Run from the repository root (uv resolves the dependencies above):
+    uv run tools/sprites/hero/src/hero_export.py .
 
 Frames (24x16, RGBA): idle_0 idle_1 walk_0 walk_1 attack_0 attack_1 hurt dead (+ extras).
 Equipment layers: equip/<slot>_<tier>.png on the same canvas, aligned to idle_0.
@@ -12,8 +19,8 @@ from PIL import Image
 
 import kaneed24 as K
 
-REPO = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(
-    "/Volumes/AIWorkSSD/AIWorkSpace/github/otani-side/kaneed-dungeon")
+# repository root: first argument, else the root this file lives in (…/tools/sprites/hero/src)
+REPO = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[4]
 HERO = REPO / "tools/sprites/hero"
 EQUIP = HERO / "equip"
 W, H = K.W, K.H
@@ -250,9 +257,9 @@ def main():
     for j, row in enumerate(rows):
         for i, im in enumerate(row):
             pv.alpha_composite(im.resize((W * S, H * S), Image.NEAREST), (8 + i * (W * S + 8), 8 + j * (H * S + 8)))
-    out = Path("out/final24/preview_equip_x6.png")
+    out = HERO / "preview_equip_x6.png"
     pv.save(out)
-    print("frames:", sorted(p.name for p in HERO.glob("*.png")))
+    print("frames:", sorted(p.name for p in HERO.glob("*.png") if not p.name.startswith("preview")))
     print("equip:", len(list(EQUIP.glob("*.png"))), "layers")
     print("preview:", out)
 
