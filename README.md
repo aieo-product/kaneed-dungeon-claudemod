@@ -53,34 +53,48 @@ Claude が考えている間、カニード がプロンプトの上でダンジ
 
 ## セットアップ
 
-1. function hooks を有効にする。`~/.claude/settings.json` に追記（既存の `env` があればマージ）:
+`~/.claude/settings.json` に次を書く（既存のキーがあればマージ）。function hooks の有効化・マーケットプレイスの登録・プラグインの有効化・自動更新が、これ 1 つで揃う。
 
-   ```json
-   {
-     "env": {
-       "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
-     }
-   }
-   ```
+```json
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
+  },
+  "extraKnownMarketplaces": {
+    "kaneed-dungeon": {
+      "source": { "source": "github", "repo": "aieo-product/kaneed-dungeon-claudemod" },
+      "autoUpdate": true
+    }
+  },
+  "enabledPlugins": {
+    "kaneed-dungeon@kaneed-dungeon": true
+  }
+}
+```
 
-2. このリポジトリをプラグインとして読み込む。試すだけならクローンして 1 セッション読み込み:
+`claude` を起動すると、プロンプトの上に カニード の帯が出る。何か依頼して Claude が作業を始めると カニード が歩き出す。
 
-   ```sh
-   git clone https://github.com/aieo-product/kaneed-dungeon-claudemod.git
-   cd kaneed-dungeon-claudemod
-   claude --plugin-dir .
-   ```
+コマンドで入れてもよい（このリポジトリ自身がマーケットプレイス）。ただし **`autoUpdate` は付かない**ので、更新は自分で `claude plugin update kaneed-dungeon@kaneed-dungeon` を打つことになる:
 
-   リポジトリ直下の `.claude/settings.json` が、このフォルダで起動したセッションに環境変数を設定する。
+```sh
+claude plugin marketplace add aieo-product/kaneed-dungeon-claudemod
+claude plugin install kaneed-dungeon@kaneed-dungeon
+```
 
-   常用するならマーケットプレイスとして登録（リポジトリ自身がマーケットプレイス）:
+試すだけならクローンして 1 セッションだけ読み込む。リポジトリ直下の `.claude/settings.json` が、このフォルダで起動したセッションに環境変数を設定する:
 
-   ```sh
-   claude plugin marketplace add aieo-product/kaneed-dungeon-claudemod
-   claude plugin install kaneed-dungeon@kaneed-dungeon
-   ```
+```sh
+git clone https://github.com/aieo-product/kaneed-dungeon-claudemod.git
+cd kaneed-dungeon-claudemod
+claude --plugin-dir .
+```
 
-3. `claude` を起動すると、プロンプトの上に カニード の帯が出る。何か依頼して Claude が作業を始めると カニード が歩き出す。
+### 更新について
+
+- 公式以外のマーケットプレイスは、**自動更新が既定でオフ**。上の `"autoUpdate": true`（または `/plugin` のマーケットプレイス画面での切り替え）を入れておくと、新しいバージョンが起動時に入る。
+- 自動更新を入れていなくても、このプラグインは **1 日 1 回 GitHub の `plugin.json` を読み**、新しいバージョンが出ていればトーストで知らせる。更新そのものは行わない。
+- 知らせも通信も要らないときは `/config` の「更新の確認」（`userConfig.updateCheck`）をオフにする。オフの間はどこにも通信しない。
+- 配布側の注意: **リリースのたびに `.claude-plugin/plugin.json` と `package.json` の `version` を上げる**。同じバージョンのままだと、自動更新も `claude plugin update` も「最新」と判断して新しいコードを配らない。
 
 ## 使い方
 
@@ -147,10 +161,10 @@ bunx -p typescript tsc -p .
 
 構成:
 
-- `hooks/register.tsx` — hooks モジュール。`/kaneed` の登録、`$.store` への保存、`turn.start` / `turn.complete` による作業中判定、`tool.call` でのテスト成否検出、`session.compact` でのマップ再生成、`ui.render` での帯描画。
+- `hooks/register.tsx` — hooks モジュール。`/kaneed` の登録、`$.store` への保存、`turn.start` / `turn.complete` による作業中判定、`tool.call` でのテスト成否検出、`session.compact` でのマップ再生成、`ui.render` での帯描画、起動時の更新確認（1 日 1 回、`$.http.fetch` で GitHub の `plugin.json` を読むだけ）。
 - `hooks/boards/dungeon.tsx` — surface モジュール。0.1 秒ごとに 1 フレーム描き、5 フレームごとにシミュレーションを 1 ティック進める。ピクセルバッファ（1 文字 = 横 1px × 縦 2px、`▀` と前景・背景色）に背景・スプライトを合成し、その上に数字・エフェクト・ミニマップを重ねる。描く色はすべて xterm-256 パレットへ丸める。Claude Code の描画側は chalk 方式（各チャンネル `round(v/255*5)`）で 256 色へ落とすので、その丸めで狙いのパレット色に着地する値（各チャンネル 51 の倍数、グレーは 8+10n）で出力する。
 - `hooks/boards/sprites.ts` — スプライトデータ（生成物）。`tools/sprites/` に作り方がある。
-- `hooks/game/*.ts` — 純関数のゲームロジック。`rng`（シード付き乱数）、`map`（部屋と通路の生成・BFS）、`items`（装備）、`shop`（ショップの棚・値段・買う品の候補）、`hero`（成長・回復・装備）、`enemies`（敵の生成）、`sim`（1 ティックの進行）、`detect`（テストコマンドの判定）。
+- `hooks/game/*.ts` — 純関数のゲームロジック。`rng`（シード付き乱数）、`map`（部屋と通路の生成・BFS）、`items`（装備）、`shop`（ショップの棚・値段・買う品の候補）、`hero`（成長・回復・装備）、`enemies`（敵の生成）、`sim`（1 ティックの進行）、`detect`（テストコマンドの判定）、`update`（バージョン比較）。
 
 ボードファイルの注意 2 点: ローカル変数名 `h` は使わない（JSX が `h()` に変換されるため）。`Client` の `module` パスは文字列リテラルで書く。
 

@@ -4,6 +4,7 @@ import { testEvent } from './game/detect.ts'
 import { isHero, stats, type Hero } from './game/hero.ts'
 import type { RunSummary } from './game/sim.ts'
 import { countEvent, countTool, dash, newTelemetry, recordContext, recordHero, recordTurn } from './game/telemetry.ts'
+import { CHECK_EVERY_MS, isNewer, MANIFEST_URL, versionIn } from './game/update.ts'
 
 // The hooks module. It owns what outlives a session: Kaneed's sheet, the run number, the floor,
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
@@ -39,6 +40,25 @@ let working = false
 // Kaneed over the saved one, and then save it
 let ready = false
 
+// The update notice. A third-party marketplace does not update itself unless the person turned
+// auto-update on, so once a day the plugin reads the manifest on the default branch and says, in a
+// toast, that a newer one is out. It is the one call that leaves the machine, and the `updateCheck`
+// option turns it off. Nothing is installed: updating stays the person's to do.
+async function checkUpdate($: EngineInterface) {
+  const now = await $.clock.now()
+  const last = Number(await $.store.get('updateCheckedAt').catch(() => 0)) || 0
+  if (now - last < CHECK_EVERY_MS) return
+  await $.store.set('updateCheckedAt', now).catch(() => {})
+  const manifest = await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).catch(() => '')
+  const mine = versionIn(manifest)
+  if (!mine) return
+  const answer = await $.http.fetch(MANIFEST_URL)
+  if (!answer.ok) return
+  const latest = versionIn(answer.text)
+  if (!isNewer(latest, mine)) return
+  $.ui.toast(`kaneed-dungeon ${latest} が出ています（いまは ${mine}）。/plugin から更新するか、settings.json のマーケットプレイスに "autoUpdate": true を書くと次からは自動で入ります`)
+}
+
 const isSave = (v: unknown): v is Save => typeof v === 'object' && v !== null && (v as Save).type === 'save' && isHero((v as Save).hero)
 
 // the cost and context fill, as the status line has them (the plain call is free)
@@ -47,7 +67,7 @@ async function refreshUsage($: EngineInterface) {
   if (usage) recordContext(tele, usage)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
     const stored = (key: string) => $.store.get(key).catch(err => { $.ui.log(`kaneed-dungeon: store read failed: ${err}`); return undefined })
@@ -65,6 +85,8 @@ export const register: Register = on => {
     await refreshUsage($)
     ready = true
     $.ui.invalidate('ui.render')
+    // not awaited: the session starts while the check is in flight
+    if (options.updateCheck !== false) void checkUpdate($).catch(err => $.ui.log(`kaneed-dungeon: update check failed: ${err}`))
     await $.command.register({
       name: 'kaneed',
       description: 'カニード のダンジョン探索: ゲーム画面 / dash / status / log / hide / show (kaneed-dungeon)',
