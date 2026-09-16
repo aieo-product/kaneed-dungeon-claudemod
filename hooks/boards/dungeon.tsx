@@ -7,8 +7,8 @@ import { idx, T, tileAt } from '../game/map.ts'
 import { rebuildFloor, startRun, step, takeEvents, takeFresh, testFailed, testPassed, type GameEvent, type RunSummary, type State } from '../game/sim.ts'
 import { EQUIP_ANCHORS, FALLBACK_ANCHORS, HERO_ANCHORS, HERO_OFFSETS, SPRITES, type Pixels } from './sprites.ts'
 import { layerOffset } from './anchors.ts'
-import { compact, duration, hbar, padCells, signed, spark } from '../game/charts.ts'
-import type { Dash } from '../game/telemetry.ts'
+import { compact, duration, hbar, padCells, spark } from '../game/charts.ts'
+import { cacheHitRate, newTally, tallyEvents, tokenTotal, type Dash, type Tally } from '../game/telemetry.ts'
 
 // The board: a surface module on the drawing thread. The dungeon is simulated in ticks of half a
 // second (../game/sim.ts); this file turns each tick's events into a side-scrolling scene drawn ten
@@ -79,6 +79,9 @@ type Local = {
   obj: Obj | null
   banners: Banner[]
   anim: TickAnim | null
+  // the simulation's own counts since the last save, and whose foe is on the field
+  tally: Tally
+  bossFoe: { boss: boolean }
   descend: number
   dead: boolean
   // frames left of the victory pose after a kill
@@ -311,7 +314,8 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
     surface.setState({
       sim, seed, heals: props?.heals ?? 0, fails: props?.fails ?? 0, frame: 0, working: props?.working === true,
       scroll: 0, walk: 0, hold: 0, heroDx: 0, heroFlash: 0, heroGlow: 0, foe: null, foeDx: 0, foeFlash: 0,
-      floats: [], bursts: [], obj: null, banners: [{ text: sim.log[sim.log.length - 1] ?? '', color: HERO_COLOR, ttl: 30 }], anim: null, descend: 0, dead: false, victory: 0,
+      floats: [], bursts: [], obj: null, banners: [{ text: sim.log[sim.log.length - 1] ?? '', color: HERO_COLOR, ttl: 30 }], anim: null,
+      tally: newTally(), bossFoe: { boss: false }, descend: 0, dead: false, victory: 0,
     })
     surface.every(FRAME_MS, () => {
       const s = surface.state
@@ -323,12 +327,17 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
         const lvBefore = sim.hero.lv
         const wasDead = sim.phase === 'dead'
         step(sim, Date.now())
-        apply(s, takeEvents(sim), surface.columns)
+        const events = takeEvents(sim)
+        apply(s, events, surface.columns)
+        tallyEvents(s.tally, events, s.bossFoe)
         const fresh = takeFresh(sim)
         const died = !wasDead && sim.phase === 'dead' ? sim.lastRun : null
         const levels = sim.hero.lv > lvBefore ? sim.hero.lv - lvBefore : 0
         // the sheet is saved when something happened, and every few ticks anyway (steps count too)
-        if (fresh.length || died || levels || sim.tick % 20 === 0) surface.post({ type: 'save', hero: sim.hero, floorNum: sim.floorNum, log: fresh, dead: died, levels })
+        if (fresh.length || died || levels || sim.tick % 20 === 0) {
+          surface.post({ type: 'save', hero: sim.hero, floorNum: sim.floorNum, log: fresh, dead: died, levels, tally: s.tally })
+          s.tally = newTally()
+        }
       }
       surface.setState({ ...s })
     })
@@ -358,9 +367,14 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
     changed = true
   }
   if (changed) {
-    apply(s, takeEvents(sim), surface.columns)
+    const events = takeEvents(sim)
+    apply(s, events, surface.columns)
+    tallyEvents(s.tally, events, s.bossFoe)
     const fresh = takeFresh(sim)
-    if (fresh.length) surface.post({ type: 'save', hero: sim.hero, floorNum: sim.floorNum, log: fresh })
+    if (fresh.length) {
+      surface.post({ type: 'save', hero: sim.hero, floorNum: sim.floorNum, log: fresh, tally: s.tally })
+      s.tally = newTally()
+    }
   }
 
   const hero = sim.hero
@@ -765,21 +779,22 @@ function logView(s: Local, props: Props, header: RenderElement, rows: number, Bo
   )
 }
 
-// ---- the dashboard: this session in charts ----
-// Three sections, each a list of lines in the order they matter: Claude's tokens, the events the
-// hooks module caught, and Kaneed's progress. Wide bands put them side by side; narrow ones stack
-// them and give each a share of the rows.
+// ---- the dashboard: this session, in numbers ----
+// Five sections, each a list of lines in the order they matter: what Claude's turns spent, the
+// turns that spent the most, what the context window holds and what is left of the usage windows,
+// the events the hooks module caught, and Kaneed's record. Wide bands put them side by side;
+// narrow ones stack them and give each a share of the rows.
 
 const LABEL_W = 11
 const VALUE_W = 10
 
 type Els = { Box: ClientElements['Box']; Text: ClientElements['Text'] }
 
-// label, sparkline, value: one chart row that fits `w` cells
-function chartLine({ Text }: Els, w: number, label: string, line: string, value: string, color: string) {
+// label, bar or sparkline, value: one chart row that fits `w` cells
+function chartLine({ Text }: Els, w: number, label: string, line: string, value: string, color: string, labelW = LABEL_W) {
   return (
     <Text wrap="truncate-end">
-      <Text dimColor>{padCells(label, LABEL_W)}</Text>
+      <Text dimColor>{padCells(label, labelW)}</Text>
       <Text color={color}>{line}</Text>
       <Text bold>{' ' + padCells(value, VALUE_W - 1)}</Text>
     </Text>
@@ -793,25 +808,152 @@ const title = ({ Text }: Els, text: string, color: string, note = '') => (
   </Text>
 )
 
+// plain numbers, `label 値` pairs on one line: for what a chart would only blur
+const factLine = ({ Text }: Els, pairs: [string, string][]) => (
+  <Text wrap="truncate-end">
+    {pairs.map(([label, value], i) => (
+      <Text>
+        <Text dimColor>{`${i ? '   ' : ''}${label} `}</Text>
+        <Text bold>{value}</Text>
+      </Text>
+    ))}
+  </Text>
+)
+
+const percent = (part: number, whole: number) => (whole > 0 ? `${Math.round((part / whole) * 100)}%` : '—')
+
+// one bar of `width` cells split by share, each part in its colour; the cells rounding leaves over
+// go to the largest remainders, so a part with anything in it keeps a cell
+function stackedBar({ Text }: Els, width: number, parts: { value: number; color: string }[]) {
+  const total = parts.reduce((a, p) => a + p.value, 0)
+  if (total <= 0) return <Text dimColor>{' '.repeat(width)}</Text>
+  const exact = parts.map(p => (p.value / total) * width)
+  const cells = exact.map(Math.floor)
+  let left = width - cells.reduce((a, n) => a + n, 0)
+  const order = exact.map((v, i) => [v - cells[i], i] as const).sort((a, b) => b[0] - a[0])
+  for (const [, i] of order) {
+    if (left <= 0) break
+    if (parts[i].value <= 0) continue
+    cells[i]++
+    left--
+  }
+  return <Text wrap="truncate-end">{parts.map((p, i) => <Text color={p.color}>{'█'.repeat(cells[i])}</Text>)}</Text>
+}
+
+// claude-opus-5-20260101 reads as opus-5
+const modelLabel = (id: string) => id.replace(/^claude-/, '').replace(/-\d{6,}$/, '') || id
+const LIMIT_LABEL: Record<string, string> = { five_hour: '5 時間枠', seven_day: '7 日枠', spend_limit: '上限額' }
+const resetLabel = (iso: string | undefined) => {
+  if (!iso) return ''
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return ''
+  const time = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+  const today = new Date()
+  const sameDay = at.getFullYear() === today.getFullYear() && at.getMonth() === today.getMonth() && at.getDate() === today.getDate()
+  return sameDay ? time : `${at.getMonth() + 1}/${at.getDate()} ${time}`
+}
+
+// what the session spent, and on what: the four kinds as shares of the whole, how much of the
+// input came back from the cache, the run of turns, and the split by loop and by model
 function tokenSection(els: Els, d: Dash, w: number): RenderElement[] {
   const { Text } = els
   const sw = Math.max(4, w - LABEL_W - VALUE_W)
   const t = d.totals
-  const all = t.input + t.output + t.cacheRead + t.cacheWrite
-  const ctx = d.context
-  const notes = [`計 ${compact(all)}`, ctx.usd !== null ? `$${ctx.usd.toFixed(2)}` : '', ctx.percent !== null ? `コンテキスト ${Math.round(ctx.percent)}%` : ''].filter(Boolean).join('  ')
-  const series = (k: 'input' | 'output' | 'cacheRead' | 'cacheWrite') => d.turns.map(p => p[k])
-  const lines = [
-    title(els, 'トークン', 'cyan', notes),
-    chartLine(els, w, '出力', spark(series('output'), sw), compact(t.output), 'magenta'),
-    chartLine(els, w, '入力', spark(series('input'), sw), compact(t.input), 'cyan'),
-    chartLine(els, w, 'Cache 読込', spark(series('cacheRead'), sw), compact(t.cacheRead), 'blue'),
-    chartLine(els, w, 'Cache 作成', spark(series('cacheWrite'), sw), compact(t.cacheWrite), 'yellow'),
+  const all = tokenTotal(t)
+  const usd = d.context.usd
+  const perTurn = usd !== null && d.mainTurns > 0 ? usd / d.mainTurns : null
+  const notes = [`計 ${compact(all)}`, usd !== null ? `$${usd.toFixed(2)}` : '', perTurn !== null ? `$${perTurn.toFixed(2)}/ターン` : ''].filter(Boolean).join('  ')
+  const parts = [
+    { label: '出力', value: t.output, color: 'magenta' },
+    { label: '入力', value: t.input, color: 'cyan' },
+    { label: 'Cache 読込', value: t.cacheRead, color: 'blue' },
+    { label: 'Cache 作成', value: t.cacheWrite, color: 'yellow' },
   ]
-  if (ctx.percent !== null) lines.push(chartLine(els, w, 'Context', hbar(ctx.percent, 100, sw), `${Math.round(ctx.percent)}%`, ctx.percent >= 85 ? 'red' : ctx.percent >= 60 ? 'yellow' : 'green'))
+  const lines: RenderElement[] = [title(els, 'トークン', 'cyan', notes), stackedBar(els, w, parts)]
+  for (const p of parts) lines.push(chartLine(els, w, p.label, hbar(p.value, Math.max(1, all), sw), compact(p.value), p.color))
+  const hit = cacheHitRate(t)
+  if (hit !== null) lines.push(<Text dimColor wrap="truncate-end">{`入力の ${Math.round(hit * 100)}% はキャッシュから読まれた`}</Text>)
+  lines.push(chartLine(els, w, 'ターン別', spark(d.turns.map(tokenTotal), sw), `${d.turns.length} 本`, 'cyanBright'))
+  // by loop: the main conversation, then each subagent by the order it first answered
+  const order = Object.keys(d.loops)
+  const loops = Object.entries(d.loops).sort((a, b) => tokenTotal(b[1]) - tokenTotal(a[1]))
+  const loopMax = Math.max(1, ...loops.map(([, v]) => tokenTotal(v)))
+  for (const [id, v] of loops) {
+    const name = id === 'main' ? 'メイン' : `サブ #${order.filter(k => k !== 'main').indexOf(id) + 1}`
+    lines.push(chartLine(els, w, name, hbar(tokenTotal(v), loopMax, sw), `${compact(tokenTotal(v))} /${v.turns}`, id === 'main' ? 'green' : 'blueBright'))
+  }
+  const models = Object.entries(d.models).sort((a, b) => tokenTotal(b[1]) - tokenTotal(a[1]))
+  if (models.length > 1) {
+    const modelMax = Math.max(1, ...models.map(([, v]) => tokenTotal(v)))
+    for (const [id, v] of models) lines.push(chartLine(els, w, modelLabel(id), hbar(tokenTotal(v), modelMax, sw), compact(tokenTotal(v)), 'magentaBright'))
+  } else if (models.length === 1) {
+    lines.push(<Text dimColor wrap="truncate-end">{`モデル ${modelLabel(models[0][0])}`}</Text>)
+  }
+  if (!d.turns.length) lines.splice(1, 0, <Text dimColor wrap="truncate-end">{'  ターンが終わると数字が入る'}</Text>)
+  return lines
+}
+
+// which turns cost the most: the prompt each answered, what it spent, how long it ran
+function heavySection(els: Els, d: Dash): RenderElement[] {
+  const { Text } = els
+  const lines: RenderElement[] = [title(els, '重かったターン', 'magenta', d.heavy.length ? `上位 ${d.heavy.length}` : '')]
+  if (!d.heavy.length) lines.push(<Text dimColor wrap="truncate-end">{'  ターンが終わると並ぶ'}</Text>)
+  for (const p of d.heavy) {
+    lines.push(
+      <Text wrap="truncate-end">
+        <Text color="magenta" bold>{padCells(compact(tokenTotal(p)), 7)}</Text>
+        <Text color="green">{padCells(p.usd !== undefined ? `$${p.usd.toFixed(2)}` : '', 7)}</Text>
+        <Text dimColor>{padCells(duration(p.ms), 7)}</Text>
+        <Text>{p.label ?? (p.agent ? 'サブエージェント' : 'プロンプトなし')}</Text>
+      </Text>,
+    )
+  }
+  const stopped = d.turns.filter(p => p.reason !== 'answer')
   const avgMs = d.turns.length ? d.turns.reduce((a, p) => a + p.ms, 0) / d.turns.length : 0
-  lines.push(<Text dimColor wrap="truncate-end">{`ターン ${d.mainTurns}  サブエージェント ${d.agentCount}（${d.agentTurns} ターン）  平均 ${duration(avgMs)}`}</Text>)
-  if (!d.turns.length) lines.splice(1, 0, <Text dimColor wrap="truncate-end">{'  ターンが終わるとグラフが伸びる（1 本 = 1 ターン）'}</Text>)
+  lines.push(<Text dimColor wrap="truncate-end">{`ターン ${d.mainTurns}  サブエージェント ${d.agentCount}（${d.agentTurns} ターン）  平均 ${duration(avgMs)}  中断・エラー ${stopped.length}`}</Text>)
+  return lines
+}
+
+// what the window holds, as /context breaks it down
+function contextSection(els: Els, d: Dash, w: number): RenderElement[] {
+  const { Text } = els
+  const nameW = LABEL_W + 4
+  const sw = Math.max(4, w - nameW - VALUE_W)
+  const ctx = d.context
+  const fill = ctx.percent
+  const lines: RenderElement[] = [
+    title(els, 'コンテキスト', 'blueBright', ctx.tokens !== null && ctx.window ? `${compact(ctx.tokens)} / ${compact(ctx.window)}` : ''),
+  ]
+  if (fill !== null) lines.push(chartLine(els, w, '使用率', hbar(fill, 100, sw), `${Math.round(fill)}%`, fill >= 85 ? 'red' : fill >= 60 ? 'yellow' : 'green', nameW))
+  const bd = ctx.breakdown
+  if (bd) {
+    const used = bd.slices.filter(slice => slice.kind === 'used' && slice.tokens > 0).sort((a, b) => b.tokens - a.tokens)
+    const max = Math.max(1, ...used.map(slice => slice.tokens))
+    for (const slice of used.slice(0, 4)) lines.push(chartLine(els, w, slice.name, hbar(slice.tokens, max, sw), compact(slice.tokens), 'blue', nameW))
+    const rest = used.slice(4).reduce((a, slice) => a + slice.tokens, 0)
+    const free = bd.slices.find(slice => slice.kind === 'free')
+    lines.push(<Text dimColor wrap="truncate-end">{`${rest > 0 ? `ほか ${compact(rest)}  ` : ''}${free ? `空き ${compact(free.tokens)}  ` : ''}圧縮 ${d.events['圧縮'] ?? 0} 回`}</Text>)
+  } else {
+    lines.push(<Text dimColor wrap="truncate-end">{'  内訳はダッシュボードを開くと集計される'}</Text>)
+  }
+  return lines
+}
+
+// how much of each usage window the account has spent, and when it comes back
+function limitSection(els: Els, d: Dash, w: number): RenderElement[] {
+  const { Text } = els
+  const nameW = LABEL_W + 4
+  const sw = Math.max(4, w - nameW - VALUE_W)
+  const limits = d.context.rateLimits
+  if (!limits.length) return []
+  const lines: RenderElement[] = [title(els, '利用上限', 'yellow')]
+  for (const limit of limits) {
+    const used = limit.percentUsed
+    lines.push(chartLine(els, w, LIMIT_LABEL[limit.kind] ?? limit.kind, hbar(used, 100, sw), `${Math.round(used)}%`, used >= 85 ? 'red' : used >= 60 ? 'yellow' : 'green', nameW))
+  }
+  // the windows come back one after another, so their times share a line
+  const resets = limits.map(limit => resetLabel(limit.resetsAt)).filter(Boolean)
+  if (resets.length) lines.push(<Text dimColor wrap="truncate-end">{`回復 ${resets.join('  ')}`}</Text>)
   return lines
 }
 
@@ -834,38 +976,43 @@ function eventSection(els: Els, d: Dash, w: number): RenderElement[] {
   return lines
 }
 
-function gameSection(els: Els, s: Local, d: Dash, w: number): RenderElement[] {
-  const { Text } = els
-  const sw = Math.max(4, w - LABEL_W - VALUE_W)
-  const hero = s.sim.hero
-  const st = stats(hero)
-  // the saved samples, then the live sheet as the last point
-  const live = { lv: hero.lv, hp: hero.hp, maxHp: st.maxHp, floor: s.sim.floorNum, gold: hero.gold, kills: d.samples.length ? d.samples[d.samples.length - 1].kills : d.kills }
-  const pts = [...d.samples, live]
-  const first = pts[0]
-  const hpRatio = st.maxHp ? hero.hp / st.maxHp : 0
+// Kaneed's session record: only what the status sheet cannot show. Plain numbers, adding up across
+// deaths, so a run that ended still counts.
+function recordSection(els: Els, s: Local, d: Dash): RenderElement[] {
+  const t = d.tally
   const since = duration(Date.now() - d.startedAt)
   return [
-    title(els, 'ゲーム進行', HERO_COLOR, `このセッション ${since}  冒険 #${hero.run}`),
-    chartLine(els, w, 'HP', spark(pts.map(p => (p.maxHp ? p.hp / p.maxHp : 0)), sw, { mode: 'mean', min: 0, max: 1 }), `${hero.hp}/${st.maxHp}`, hpRatio <= 0.25 ? 'red' : hpRatio <= 0.5 ? 'yellow' : 'green'),
-    chartLine(els, w, 'Lv', spark(pts.map(p => p.lv), sw, { mode: 'mean' }), `${hero.lv} (${signed(hero.lv - first.lv)})`, 'yellowBright'),
-    chartLine(els, w, '階層', spark(pts.map(p => p.floor), sw, { mode: 'mean' }), `B${s.sim.floorNum}F (${signed(s.sim.floorNum - first.floor)})`, 'cyan'),
-    chartLine(els, w, '討伐', spark(pts.map(p => p.kills), sw, { mode: 'mean' }), `+${d.kills}`, 'redBright'),
-    chartLine(els, w, '所持金', spark(pts.map(p => p.gold), sw, { mode: 'mean' }), `${compact(hero.gold)} G`, 'yellow'),
-    <Text dimColor wrap="truncate-end">{`歩数 +${d.steps}  Lv アップ ${d.levels}  装備入手 ${d.items}  死亡 ${d.deaths}`}</Text>,
+    title(els, 'ゲーム記録', HERO_COLOR, `このセッション ${since}  冒険 #${s.sim.hero.run}`),
+    factLine(els, [['死亡', String(d.deaths)], ['最高到達', `B${d.maxFloor}F`], ['最高 Lv', String(d.maxLv)]]),
+    factLine(els, [['撃破', `${t.kills}（ボス ${t.bossKills}）`], ['歩数', compact(d.steps)]]),
+    factLine(els, [['攻撃', String(t.attacks)], ['会心', `${t.crits} (${percent(t.crits, t.attacks)})`], ['与ダメ', compact(t.dealt)]]),
+    factLine(els, [['被弾', String(t.hitsTaken)], ['回避', `${t.dodges} (${percent(t.dodges, t.dodges + t.hitsTaken)})`], ['被ダメ', compact(t.taken)]]),
+    factLine(els, [['回復', `${t.healTest + t.healLevel}（テスト ${t.healTest} / Lv ${t.healLevel}）`], ['+HP', compact(t.healed)]]),
+    factLine(els, [['宝箱', String(t.chests)], ['装備', `${t.items}（弱体化 ${t.downgrades}）`]]),
+    factLine(els, [['獲得', `${compact(t.gold)} G`], ['Lv アップ', String(d.levels)]]),
   ]
 }
 
-// sections stacked in one column: each gets an even share of the rows, and what one leaves unused
-// goes to the next that still has lines
+// sections stacked in one column. A section that fits at all gets its heading and a line under it
+// (a heading alone says nothing), and then they grow line by line together until the rows run out,
+// the ones higher up first.
 function stack(sections: RenderElement[][], rows: number): RenderElement[] {
-  const share = Math.floor(rows / sections.length)
-  const quota = sections.map(sec => Math.min(sec.length, share))
-  let spare = rows - quota.reduce((a, n) => a + n, 0)
-  for (let i = 0; i < sections.length && spare > 0; i++) {
-    const more = Math.min(spare, sections[i].length - quota[i])
-    quota[i] += more
-    spare -= more
+  const quota = sections.map(() => 0)
+  let left = rows
+  for (let i = 0; i < sections.length && left >= 2; i++) {
+    if (!sections[i].length) continue
+    quota[i] = Math.min(sections[i].length, 2)
+    left -= quota[i]
+  }
+  while (left > 0) {
+    let moved = false
+    for (let i = 0; i < sections.length && left > 0; i++) {
+      if (quota[i] === 0 || quota[i] >= sections[i].length) continue
+      quota[i]++
+      left--
+      moved = true
+    }
+    if (!moved) break
   }
   return sections.flatMap((sec, i) => sec.slice(0, quota[i]))
 }
@@ -878,11 +1025,14 @@ function dashView(s: Local, d: Dash | undefined, header: RenderElement, cols: nu
   const gap = 2
   const w = Math.floor((cols - gap * (layout - 1)) / layout)
   const tokens = tokenSection(els, d, w)
+  const heavy = heavySection(els, d)
+  const context = contextSection(els, d, w)
+  const limits = limitSection(els, d, w)
   const events = eventSection(els, d, w)
-  const game = gameSection(els, s, d, w)
-  const columns = layout === 3 ? [tokens, events, game].map(sec => sec.slice(0, body))
-    : layout === 2 ? [stack([tokens, events], body), game.slice(0, body)]
-    : [stack([game, tokens, events], body)]
+  const record = recordSection(els, s, d)
+  const columns = layout === 3 ? [tokens.slice(0, body), stack([heavy, events], body), stack([context, limits, record], body)]
+    : layout === 2 ? [stack([tokens, heavy], body), stack([context, limits, record, events], body)]
+    : [stack([tokens, heavy, context, limits, record, events], body)]
   return (
     <Box flexDirection="column">
       {header}

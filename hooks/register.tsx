@@ -1,9 +1,9 @@
 /* @jsx h */
 import type { EngineInterface, Register } from 'claude-code'
 import { testEvent } from './game/detect.ts'
-import { isHero, stats, type Hero } from './game/hero.ts'
+import { isHero, type Hero } from './game/hero.ts'
 import type { RunSummary } from './game/sim.ts'
-import { countEvent, countTool, dash, newTelemetry, recordContext, recordHero, recordTurn } from './game/telemetry.ts'
+import { countEvent, countTool, dash, isTally, newTelemetry, recordContext, recordHero, recordPrompt, recordTurn, type Tally } from './game/telemetry.ts'
 
 // The hooks module. It owns what outlives a session: Kaneed's sheet, the run number, the floor,
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
@@ -16,7 +16,7 @@ import { countEvent, countTool, dash, newTelemetry, recordContext, recordHero, r
 // it catches, the tokens each turn spent, and Kaneed's progress at each save. Memory only.
 
 type View = 'game' | 'dash' | 'status' | 'log'
-type Save = { type: 'save'; hero: Hero; floorNum: number; log: string[]; dead?: RunSummary | null; levels?: number }
+type Save = { type: 'save'; hero: Hero; floorNum: number; log: string[]; dead?: RunSummary | null; levels?: number; tally?: Tally }
 
 const LOG_KEEP = 300
 const HALL_KEEP = 30
@@ -40,10 +40,15 @@ let ready = false
 
 const isSave = (v: unknown): v is Save => typeof v === 'object' && v !== null && (v as Save).type === 'save' && isHero((v as Save).hero)
 
-// the cost and context fill, as the status line has them (the plain call is free)
-async function refreshUsage($: EngineInterface) {
-  const usage = await $.session.usage().catch(err => { $.ui.log(`kaneed-dungeon: session.usage failed: ${err}`); return undefined })
-  if (usage) recordContext(tele, usage)
+// The cost, the context fill and the rate-limit windows, as the status line has them: the plain
+// call is free. The dashboard also asks for the context broken down by category, which `summary`
+// estimates locally (no request either; `full` would count each category by API, so it is never
+// asked for). Reading it is work, so only the open dashboard asks.
+async function refreshUsage($: EngineInterface, breakdown = false) {
+  const usage = breakdown
+    ? await $.session.usage({ breakdown: 'summary' }).catch(err => { $.ui.log(`kaneed-dungeon: session.usage failed: ${err}`); return undefined })
+    : await $.session.usage().catch(err => { $.ui.log(`kaneed-dungeon: session.usage failed: ${err}`); return undefined })
+  if (usage) recordContext(tele, usage, await $.clock.now())
 }
 
 export const register: Register = on => {
@@ -85,7 +90,7 @@ export const register: Register = on => {
     else if (arg === 'log' || arg === 'history') view = 'log'
     else if (arg === 'dash' || arg === 'dashboard' || arg === 'stats') {
       view = 'dash'
-      await refreshUsage($)
+      await refreshUsage($, true)
     } else view = 'game'
     $.ui.invalidate('ui.render')
     const lv = hero ? `Lv ${hero.lv} · HP ${hero.hp}` : 'Lv 1'
@@ -95,17 +100,19 @@ export const register: Register = on => {
   // the band's isWorking prop changes with the turn; a redraw carries it to the board
   on('turn.start', async ($, e, next) => {
     working = true
+    recordPrompt(tele, e.turnId, e.text)
     countEvent(tele, 'ターン開始', await $.clock.now())
     $.ui.invalidate('ui.render')
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    recordTurn(tele, e.usage, e.durationMs, e.agentId, await $.clock.now())
+    recordTurn(tele, { usage: e.usage, ms: e.durationMs, agentId: e.agentId, turnId: e.turnId, reason: e.reason }, await $.clock.now())
     // a subagent's turn ending is not the main turn ending
     if (e.agentId === undefined) {
       working = false
-      await refreshUsage($)
+      // the ledger is read after the turn is recorded, so its rise prices that turn
+      await refreshUsage($, view === 'dash')
     }
     $.ui.invalidate('ui.render')
     return r
@@ -154,7 +161,7 @@ export const register: Register = on => {
     run = data.hero.run
     if (data.log.length) history = [...history, ...data.log].slice(-LOG_KEEP)
     if (data.dead) hall = [...hall, data.dead].slice(-HALL_KEEP)
-    recordHero(tele, { hero, floor: floorNum, maxHp: stats(hero).maxHp, log: data.log, died: !!data.dead, levels: data.levels ?? 0 }, await $.clock.now())
+    recordHero(tele, { hero, floor: floorNum, died: !!data.dead, levels: data.levels ?? 0, tally: isTally(data.tally) ? data.tally : undefined })
     if (data.levels) $.ui.toast(`カニード が Lv ${hero.lv} になった！HP ${hero.hp} まで回復`)
     if (data.dead) $.ui.toast(`カニード は ${data.dead.killedBy} に倒された… 冒険 #${data.dead.run} は Lv ${data.dead.lv}、B${data.dead.floor}F で終わった`)
     if (!saving) {
@@ -178,7 +185,7 @@ export const register: Register = on => {
     const rows = Math.max(9, Math.min(22, e.props.maxRows - 1))
     const pick = (v: View) => async () => {
       view = v
-      if (v === 'dash') await refreshUsage($)
+      if (v === 'dash') await refreshUsage($, true)
       $.ui.invalidate('ui.render')
     }
     const close = () => {

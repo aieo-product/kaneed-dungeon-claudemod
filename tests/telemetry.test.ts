@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { cellWidth, compact, duration, hbar, padCells, resample, spark } from '../hooks/game/charts.ts'
-import { newHero, stats } from '../hooks/game/hero.ts'
-import { countEvent, countTool, dash, MINUTES_KEEP, newTelemetry, recordContext, recordHero, recordTurn, SAMPLES_KEEP, toolLabel } from '../hooks/game/telemetry.ts'
+import { newHero } from '../hooks/game/hero.ts'
+import { addTally, cacheHitRate, countEvent, countTool, dash, HEAVY_KEEP, isTally, MINUTES_KEEP, newTally, newTelemetry, recordContext, recordHero, recordPrompt, recordTurn, tallyEvents, tokenTotal, toolLabel, TURNS_KEEP } from '../hooks/game/telemetry.ts'
+import { startRun, step, takeEvents, type GameEvent } from '../hooks/game/sim.ts'
 
-const usage = (input: number, output: number, cacheRead = 0, cacheWrite = 0) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite })
+const usage = (input: number, output: number, cacheRead = 0, cacheWrite = 0, model = 'claude-opus-5') =>
+  ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite, model })
+const turn = (id: string, u: ReturnType<typeof usage> | undefined, at: number, agentId?: string, ms = 1000) =>
+  ({ usage: u, ms, agentId, turnId: id, reason: 'answer' })
 
 describe('charts', () => {
   test('sparklines scale to the largest value and pad to width', () => {
@@ -62,61 +66,113 @@ describe('telemetry', () => {
     countEvent(t, 'ターン開始', (MINUTES_KEEP + 19) * 60_000 + 5)
     expect(t.perMinute[t.perMinute.length - 1]).toBe(2)
   })
-  test('turns add up their tokens; subagents are counted apart', () => {
+  test('turns add up their tokens; subagents and models are counted apart', () => {
     const t = newTelemetry(0)
-    recordTurn(t, usage(100, 50, 1000, 10), 3000, undefined, 1)
-    recordTurn(t, usage(10, 5), 1000, 'agent-1', 2)
-    recordTurn(t, usage(10, 5), 1000, 'agent-1', 3)
-    recordTurn(t, undefined, 500, undefined, 4)
+    recordTurn(t, turn('t1', usage(100, 50, 1000, 10), 1), 1)
+    recordTurn(t, turn('t2', usage(10, 5, 0, 0, 'claude-haiku-4-5'), 2, 'agent-1'), 2)
+    recordTurn(t, turn('t3', usage(10, 5, 0, 0, 'claude-haiku-4-5'), 3, 'agent-1'), 3)
+    recordTurn(t, turn('t4', undefined, 4), 4)
     expect(t.totals).toEqual({ input: 120, output: 60, cacheRead: 1000, cacheWrite: 10 })
     expect(t.mainTurns).toBe(2)
     expect(t.agentTurns).toBe(2)
     expect(t.turns.length).toBe(3)
     expect(t.events).toEqual({ ターン完了: 2, サブ完了: 2 })
     expect(dash(t).agentCount).toBe(1)
-    recordContext(t, { context: { tokens: 45_000, window: 200_000, percent: 22.5 }, cost: { usd: 0.42 } })
-    recordContext(t, { context: { window: 200_000 } })
-    expect(t.context).toEqual({ usd: 0.42, percent: 22.5, tokens: 45_000, window: 200_000 })
+    expect(t.loops.main.turns).toBe(1)
+    expect(tokenTotal(t.loops['agent-1'])).toBe(30)
+    expect(t.models['claude-haiku-4-5'].turns).toBe(2)
+    expect(cacheHitRate(t.totals)).toBeCloseTo(1000 / 1130, 6)
+    expect(cacheHitRate({ input: 0, output: 5, cacheRead: 0, cacheWrite: 0 })).toBeNull()
   })
-  test("kills and steps add up across a death; samples thin out when full", () => {
+  test('a turn carries the prompt it answered, and keeps its place among the heaviest', () => {
+    const t = newTelemetry(0)
+    recordPrompt(t, 't1', '  ダッシュボードの\n  確認をしたい  ')
+    recordTurn(t, turn('t1', usage(10, 5), 1), 1)
+    expect(t.turns[0].label).toBe('ダッシュボードの 確認をしたい')
+    // the label is handed over once: a turn id never labels a second turn
+    expect(t.labels).toEqual({})
+    for (let i = 0; i < TURNS_KEEP + 10; i++) recordTurn(t, turn(`x${i}`, usage(i, 0), i + 2), i + 2)
+    expect(t.turns.length).toBe(TURNS_KEEP)
+    expect(t.heavy.length).toBe(HEAVY_KEEP)
+    expect(t.heavy.map(tokenTotal)).toEqual([209, 208, 207, 206, 205])
+  })
+  test('a turn is priced by how far the cost ledger rose while it ran', () => {
+    const t = newTelemetry(0)
+    // the first reading only marks where the ledger stood (a resumed session starts part-spent)
+    recordContext(t, { cost: { usd: 1.0 } })
+    recordTurn(t, turn('t1', usage(10, 5), 1), 1)
+    recordContext(t, { cost: { usd: 1.25 } })
+    recordTurn(t, turn('t2', usage(10, 5), 2, 'agent-1'), 2)
+    recordTurn(t, turn('t3', usage(10, 5), 3), 3)
+    recordContext(t, { cost: { usd: 1.75 } })
+    expect(t.turns[0].usd).toBeCloseTo(0.25, 6)
+    // a subagent's turn is not priced on its own: its cost is the main turn's
+    expect(t.turns[1].usd).toBeUndefined()
+    expect(t.turns[2].usd).toBeCloseTo(0.5, 6)
+  })
+  test('the context reading keeps the rate-limit windows and the breakdown', () => {
+    const t = newTelemetry(0)
+    recordContext(t, {
+      context: { tokens: 45_000, window: 200_000, percent: 22.5, breakdown: { categories: [{ name: 'System prompt', tokens: 3000, kind: 'used' }, { name: 'Free space', tokens: 150_000, kind: 'free' }], totalTokens: 45_000, rawMaxTokens: 195_000, percentage: 23, model: 'claude-opus-5' } },
+      cost: { usd: 0.42 },
+      rateLimits: [{ kind: 'five_hour', percentUsed: 38, resetsAt: '2026-09-16T22:10:00Z' }],
+    }, 1000)
+    expect(t.context.rateLimits[0].kind).toBe('five_hour')
+    expect(t.context.breakdown?.slices).toHaveLength(2)
+    // a later plain reading keeps the breakdown it cannot refresh
+    recordContext(t, { context: { window: 200_000 }, cost: { usd: 0.5 } }, 2000)
+    expect(t.context.breakdown?.total).toBe(45_000)
+    expect(t.context.percent).toBe(22.5)
+  })
+  test("the simulation's events are counted as the record's numbers", () => {
+    const events: GameEvent[] = [
+      { type: 'engage', kind: 0, boss: true, lv: 3, hp: 20, maxHp: 20 },
+      { type: 'hit', target: 'foe', dmg: 7, crit: true, hpLeft: 13 },
+      { type: 'hit', target: 'hero', dmg: 4, crit: false, hpLeft: 26 },
+      { type: 'miss', target: 'hero' },
+      { type: 'kill', kind: 0, xp: 12, gold: 9 },
+      { type: 'chest', gold: 25 },
+      { type: 'item', name: '鉄の剣', rarity: 2, better: false, replaced: '鋼の剣', wizard: false },
+      { type: 'levelup', lv: 4, hp: 30 },
+      { type: 'heal', amount: 11 },
+    ]
+    const tally = tallyEvents(newTally(), events)
+    expect(tally).toMatchObject({ attacks: 1, crits: 1, dealt: 7, hitsTaken: 1, taken: 4, dodges: 1, kills: 1, bossKills: 1, chests: 1, gold: 34, items: 1, downgrades: 1, healLevel: 1, healTest: 1, healed: 11 })
+    // the foe on the field is remembered across the posts the board splits its events into
+    const state = { boss: false }
+    const split = tallyEvents(newTally(), [events[0]], state)
+    tallyEvents(split, [events[4]], state)
+    expect(split.bossKills).toBe(1)
+    expect(isTally(tally)).toBe(true)
+    expect(isTally({ attacks: 1 })).toBe(false)
+    expect(addTally(newTally(), tally).dealt).toBe(7)
+  })
+  test('the record adds up across a death, and keeps the best the session reached', () => {
     const t = newTelemetry(0)
     const hero = newHero(1, 0)
-    const save = (at: number, log: string[] = [], died = false, levels = 0) => recordHero(t, { hero: { ...hero }, floor: hero.floor, maxHp: stats(hero).maxHp, log, died, levels }, at)
-    save(0)
-    hero.kills = 3
+    const save = (floor: number, died = false, levels = 0, tally = newTally()) =>
+      recordHero(t, { hero: { ...hero }, floor, died, levels, tally })
+    save(1)
     hero.steps = 40
-    save(10_000, ['スライム が落とした 革のブーツ［レア］ を手に入れて身につけた'], false, 1)
+    hero.lv = 6
+    save(4, false, 1, { ...newTally(), kills: 3, attacks: 9 })
     // the run ends and the next starts from nothing
-    Object.assign(hero, { run: 2, kills: 1, steps: 5 })
-    save(20_000, [], true)
-    expect(t.kills).toBe(4)
+    Object.assign(hero, { run: 2, steps: 5, lv: 1 })
+    save(1, true, 0, { ...newTally(), kills: 1 })
     expect(t.steps).toBe(45)
     expect(t.deaths).toBe(1)
     expect(t.levels).toBe(1)
-    expect(t.items).toBe(1)
-    expect(t.samples.map(s => s.kills)).toEqual([0, 3, 4])
-
-    for (let i = 0; i < SAMPLES_KEEP * 2; i++) save(30_000 + i * 60_000)
-    expect(t.samples.length).toBeLessThanOrEqual(SAMPLES_KEEP)
-    expect(t.samples.length).toBeGreaterThan(SAMPLES_KEEP / 4)
-  })
-  test('saves within one interval update the last sample instead of adding one', () => {
-    const t = newTelemetry(0)
-    const hero = newHero(1, 0)
-    const save = (at: number) => recordHero(t, { hero: { ...hero }, floor: 1, maxHp: 50, log: [], died: false, levels: 0 }, at)
-    save(0)
-    save(1000)
-    hero.hp = 20
-    save(2000)
-    expect(t.samples.length).toBe(2)
-    expect(t.samples[1].hp).toBe(20)
-    expect(t.samples[1].at).toBe(1000)
+    expect(t.maxFloor).toBe(4)
+    expect(t.maxLv).toBe(6)
+    expect(t.tally.kills).toBe(4)
+    expect(t.tally.attacks).toBe(9)
   })
   test('the dashboard snapshot is detached: freezing it leaves the telemetry writable', () => {
     const t = newTelemetry(0)
     countTool(t, 'Bash', 0)
-    recordTurn(t, usage(1, 1), 10, undefined, 0)
-    recordHero(t, { hero: newHero(1, 0), floor: 1, maxHp: 50, log: [], died: false, levels: 0 }, 0)
+    recordTurn(t, turn('t1', usage(1, 1), 0), 0)
+    recordHero(t, { hero: newHero(1, 0), floor: 1, died: false, levels: 0, tally: newTally() })
+    recordContext(t, { rateLimits: [{ kind: 'five_hour', percentUsed: 10 }], context: { breakdown: { categories: [{ name: 'Messages', tokens: 10, kind: 'used' }] } } }, 0)
     const deepFreeze = (v: unknown): void => {
       if (typeof v !== 'object' || v === null) return
       Object.freeze(v)
@@ -125,10 +181,40 @@ describe('telemetry', () => {
     deepFreeze(dash(t))
     expect(() => {
       countTool(t, 'Bash', 1)
-      recordTurn(t, usage(1, 1), 10, undefined, 1)
-      recordHero(t, { hero: newHero(1, 0), floor: 1, maxHp: 50, log: [], died: false, levels: 0 }, 60_000)
-      recordContext(t, { cost: { usd: 1 } })
+      recordTurn(t, turn('t2', usage(1, 1), 1), 1)
+      recordHero(t, { hero: newHero(1, 0), floor: 2, died: false, levels: 0, tally: { ...newTally(), kills: 1 } })
+      recordContext(t, { cost: { usd: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: 20 }] }, 2)
     }).not.toThrow()
     expect(t.tools.Bash).toBe(2)
+    expect(t.tally.kills).toBe(1)
+  })
+})
+
+// the board hands its events over in the batches its saves fall into, so the record is counted the
+// way the game actually plays: a real run, tallied a tick at a time
+describe('the record of a real run', () => {
+  test('a run of a few hundred ticks fills the counters the status sheet cannot show', () => {
+    const t = newTelemetry(0)
+    const s = startRun(7, 1, 0)
+    takeEvents(s)
+    const boss = { boss: false }
+    let pending = newTally()
+    for (let tick = 0; tick < 600; tick++) {
+      const before = s.hero.lv
+      step(s, tick * 500)
+      tallyEvents(pending, takeEvents(s), boss)
+      if (tick % 20 === 0) {
+        recordHero(t, { hero: s.hero, floor: s.floorNum, died: s.phase === 'dead', levels: Math.max(0, s.hero.lv - before), tally: pending })
+        pending = newTally()
+      }
+    }
+    expect(t.tally.attacks).toBeGreaterThan(0)
+    expect(t.tally.dealt).toBeGreaterThan(t.tally.attacks)
+    expect(t.tally.kills).toBeGreaterThan(0)
+    expect(t.tally.hitsTaken + t.tally.dodges).toBeGreaterThan(0)
+    expect(t.steps).toBeGreaterThan(0)
+    expect(t.maxLv).toBeGreaterThanOrEqual(1)
+    // gold is earned across the run even when a death empties the purse
+    expect(t.tally.gold).toBeGreaterThanOrEqual(0)
   })
 })
