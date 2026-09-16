@@ -44,7 +44,7 @@ case "$BUMP" in
   [0-9]*.[0-9]*.[0-9]*) NEXT=$BUMP ;;
   *) die "バージョンは patch / minor / major か X.Y.Z" ;;
 esac
-[ "$NEXT" != "$CURRENT" ] || die "バージョンが変わらない（$CURRENT）"
+[ "$NEXT" != "$CURRENT" ] || die "バージョンが変わらない（${CURRENT}）"
 git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null && die "タグ v$NEXT はもうある"
 echo "  $CURRENT → $NEXT"
 
@@ -67,7 +67,7 @@ fi
 NOTES=$(printf '%s\n\n**更新**: 自動更新を入れていれば次の起動で入る。手動なら `claude plugin update kaneed-dungeon@kaneed-dungeon`（再起動で反映）。\n' "$NOTES")
 
 BRANCH="chore/release-$NEXT"
-echo "▌バージョンを上げて PR を作る（$BRANCH）"
+echo "▌バージョンを上げて PR を作る（${BRANCH}）"
 run git checkout -q -b "$BRANCH"
 if [ "$DRY" = 0 ]; then
   for f in .claude-plugin/plugin.json package.json; do
@@ -98,5 +98,5 @@ if [ "$DRY" = 0 ]; then
   echo "✔ v$NEXT を公開した: $(gh release view "v$NEXT" --json url --jq .url)"
 else
   echo "  (dry-run) gh release create v$NEXT"
-  echo "✔ dry-run 完了（$CURRENT → $NEXT）"
+  echo "✔ dry-run 完了（$CURRENT → ${NEXT}）"
 fi
