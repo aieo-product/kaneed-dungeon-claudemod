@@ -156,9 +156,12 @@ describe('telemetry', () => {
       { type: 'item', name: '鉄の剣', rarity: 2, better: false, replaced: '鋼の剣', wizard: false },
       { type: 'levelup', lv: 4, hp: 30 },
       { type: 'heal', amount: 11 },
+      { type: 'shop', shelf: [], lv: 4, gold: 80, hp: 20, equipment: newHero(1, 0).equipment, pick: 0, price: 30, healed: 12, item: null },
+      { type: 'shop', shelf: [], lv: 4, gold: 50, hp: 32, equipment: newHero(1, 0).equipment, pick: 1, price: 40, healed: 0, item: { name: '鋼の盾', rarity: 3, better: true, replaced: '木の盾', wizard: false } },
     ]
     const tally = tallyEvents(newTally(), events)
-    expect(tally).toMatchObject({ attacks: 1, crits: 1, dealt: 7, hitsTaken: 1, taken: 4, dodges: 1, kills: 1, bossKills: 1, chests: 1, gold: 34, items: 1, downgrades: 1, healLevel: 1, healTest: 1, healed: 11 })
+    // the shop's ware counts as equipment too, and its remedy as a heal
+    expect(tally).toMatchObject({ attacks: 1, crits: 1, dealt: 7, hitsTaken: 1, taken: 4, dodges: 1, kills: 1, bossKills: 1, chests: 1, gold: 34, items: 2, downgrades: 1, healLevel: 1, healTest: 1, healShop: 1, healed: 23, buys: 2, spent: 70 })
     // the foe on the field is remembered across the posts the board splits its events into
     const state = { boss: false }
     const split = tallyEvents(newTally(), [events[0]], state)

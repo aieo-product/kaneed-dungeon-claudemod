@@ -5,9 +5,10 @@ import { stats, xpNeeded, type Hero } from '../game/hero.ts'
 import { isWizardItem, itemName, rarityColor, rarityName, RARITY_COLORS, SLOT_LABEL, SLOTS, type Slot } from '../game/items.ts'
 import { idx, T, tileAt } from '../game/map.ts'
 import { rebuildFloor, startRun, step, takeEvents, takeFresh, testFailed, testPassed, type GameEvent, type RunSummary, type State } from '../game/sim.ts'
+import { priceOf, wareName, type Ware } from '../game/shop.ts'
 import { EQUIP_ANCHORS, FALLBACK_ANCHORS, HERO_ANCHORS, HERO_OFFSETS, SPRITES, type Pixels } from './sprites.ts'
 import { layerOffset } from './anchors.ts'
-import { compact, duration, hbar, padCells, spark } from '../game/charts.ts'
+import { cellWidth, compact, duration, hbar, padCells, spark } from '../game/charts.ts'
 import { cacheHitRate, newTally, tallyEvents, tokenTotal, type Dash, type Tally } from '../game/telemetry.ts'
 import { bandRows, DEFAULTS, ROW_CHOICES, SCALE_CHOICES, SKIN_IDS, wantScale as scaleWanted, type Settings } from '../game/settings.ts'
 
@@ -57,7 +58,8 @@ type Cell = [glyph: string, fg?: string, bg?: string, dim?: boolean, bold?: bool
 type Float = { x: number; y: number; text: string; color: string; ttl: number; bold?: boolean }
 type Burst = { x: number; y: number; ttl: number; big: boolean }
 type Foe = { key: string; name: string; boss: boolean; lv: number; hp: number; maxHp: number; x: number; home: number; state: 'enter' | 'idle' | 'dying' | 'leave'; t: number }
-type Obj = { kind: 'chest' | 'stairs'; t: number; dx: number }
+type ShopVisit = Extract<GameEvent, { type: 'shop' }>
+type Obj = { kind: 'chest' | 'stairs' | 'shop'; t: number; dx: number; shop?: ShopVisit }
 type Banner = { text: string; color?: string; ttl: number; bold?: boolean }
 type TickAnim = { heroHits: { dmg: number; crit: boolean }[]; foeHits: ({ dmg: number } | 'miss')[]; t: number }
 
@@ -127,6 +129,67 @@ const STAIRS: Pixels = (() => {
   }
   return rows
 })()
+
+// pixel art from rows of letters, one letter a colour, '.' clear
+const pix = (rows: string[], pal: Record<string, string>): Pixels => rows.map(line => [...line].map(ch => pal[ch] ?? null))
+
+// the shopkeeper: a brown hat with a red band, a moustache, an apron with a gold button
+const SHOPKEEPER = pix([
+  '....KKKKKKK....',
+  '...KHHHHHHHK...',
+  '...KHHHHHHHK...',
+  '..KRRRRRRRRRK..',
+  '.KHHHHHHHHHHHK.',
+  '..KSSSSSSSSSK..',
+  '..KSEESSSEESK..',
+  '..KSSSSNSSSSK..',
+  '..KSMMMMMMMSK..',
+  '...KSSMMMSSK...',
+  '..KBBKSSSKBBK..',
+  '.KBBBAAAAABBBK.',
+  '.KSKBAAAAABKSK.',
+  '.KSKBAAYAABKSK.',
+  '..KKBAAAAABKK..',
+  '...KPPPPPPPK...',
+  '...KPPKKKPPK...',
+  '...KKK...KKK...',
+], { K: '#1c1c1c', H: '#875f00', R: '#af0000', S: '#ffd7af', E: '#000000', N: '#d7af87', M: '#5f3700', B: '#005f87', A: '#eeeeee', Y: '#ffd700', P: '#444444' })
+
+// the wares on the shelf, 7x6 each; equipment by its slot
+const ICON_PAL = { K: '#1c1c1c', W: '#ffffff', L: '#5faf00', G: '#87d75f', D: '#875f00', R: '#d70000', Y: '#ffd700', B: '#8a8a8a', P: '#5f5fd7' }
+const ICONS: Record<string, Pixels> = {
+  herb: pix(['...L...', '..LGL..', '.LGLGL.', '..LGL..', '...D...', '..DDD..'], ICON_PAL),
+  potion: pix(['..KKK..', '...W...', '..KRK..', '.KRRRK.', '.KRRWK.', '..KKK..'], ICON_PAL),
+  sword: pix(['.....W.', '....W..', '...W...', '.YW....', '..Y....', '.Y.....'], ICON_PAL),
+  shield: pix(['.KKKKK.', '.KBYBK.', '.KYYYK.', '.KBYBK.', '..KBK..', '...K...'], ICON_PAL),
+  hat: pix(['...K...', '..KPK..', '..KPK..', '.KPPPK.', 'KYYYYYK', '.......'], ICON_PAL),
+  eyewear: pix(['.......', 'KKK.KKK', 'KWKKKWK', 'KKK.KKK', '.......', '.......'], ICON_PAL),
+  boots: pix(['.KK....', '.KB....', '.KB....', '.KBBBK.', '.KBBBBK', '.KKKKKK'], ICON_PAL),
+}
+const iconOf = (w: Ware) => ICONS[w.kind === 'gear' ? w.item.slot : w.kind]
+const ICON_W = 7
+const ICON_H = 6
+const SHELF_STEP = 10
+const SHELF_W = 3 * SHELF_STEP + 2
+const WOOD_TOP = '#d7875f'
+const WOOD = '#875f00'
+const WOOD_DARK = '#5f3700'
+
+// the visit, in frames (0.1 s each): the keeper greets, a cursor runs over the shelf and slows onto
+// the ware Kaneed picks, the ware blinks, flies to Kaneed, and takes effect
+const SHOP_STEPS = [8, 10, 12, 14, 16, 19, 22, 26]
+const SHOP_LAND = 26
+const SHOP_FLY = 32
+const SHOP_GIVE = 38
+const SHOP_END = 50
+// where the cursor stands at frame t: it steps back from the pick so the last step lands on it
+function shopCursor(v: ShopVisit, t: number): number {
+  const k = SHOP_STEPS.filter(at => at <= t).length - 1
+  if (k < 0) return -1
+  if (t >= SHOP_LAND && v.pick < 0) return -1
+  const target = Math.max(0, v.pick)
+  return (((target - (SHOP_STEPS.length - 1 - k)) % 3) + 3) % 3
+}
 
 const bar = (value: number, max: number, width: number) => {
   const filled = max > 0 ? Math.round((Math.max(0, value) / max) * width) : 0
@@ -453,7 +516,9 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
     }
   }
 
-  const hero = sim.hero
+  // during a shop visit the sheet shows what Kaneed had until the ware reaches it
+  const visit = s.obj?.kind === 'shop' && s.obj.shop && s.obj.t < SHOP_GIVE ? s.obj.shop : null
+  const hero = visit ? { ...sim.hero, hp: visit.hp, gold: visit.gold, equipment: visit.equipment } : sim.hero
   const st = stats(hero)
   const hpRatio = st.maxHp ? hero.hp / st.maxHp : 0
   const lowHp = hpRatio <= 0.25
@@ -509,11 +574,12 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
   const heroPx = stageSprite(heroKey0, canvas.hpx - 4, scale, heroArt)
   const heroW = widthOf(heroPx)
   const frontX = HERO_X + heroW + 12
+  const shopAt = s.obj?.kind === 'shop' && s.obj.shop ? drawShop(canvas, s.obj, frontX + s.obj.dx, groundPx, scale) : null
   if (s.obj) {
     const chest = scaled(s.obj.t >= 6 ? chestOpen : chestClosed, s.obj.t >= 6 ? 'chest_open' : 'chest_closed', scale)
     const well = scaled(stairs, 'stairs', scale)
     if (s.obj.kind === 'chest') canvas.blit(chest, frontX + s.obj.dx, groundPx - chest.length)
-    else canvas.blit(well, frontX, groundPx - well.length + Math.round(2 * scale))
+    else if (s.obj.kind === 'stairs') canvas.blit(well, frontX, groundPx - well.length + Math.round(2 * scale))
   }
   // the foe, bobbing in counter-phase, flashing when hit, flickering out when slain
   // the foe's three idle frames (rest, squash, stretch) loop while it stands; the lunge stretches
@@ -540,6 +606,13 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
   // the idle loop advances every 0.8 s; walking alternates per step; the strike has two frames
   const alt = walking ? s.walk : s.heroDx > 0 ? (s.heroDx >= 3 ? 1 : 0) : Math.floor(s.frame / 8)
   drawHero(canvas, hero, pose, alt, HERO_X + Math.round(s.heroDx * scale), heroY, canvas.hpx - 4, scale, skin, heroTint)
+  // the bought ware on its way to Kaneed, in an arc over the counter
+  if (shopAt && s.obj?.shop && s.obj.shop.pick >= 0 && s.obj.t >= SHOP_FLY && s.obj.t < SHOP_GIVE) {
+    const p = (s.obj.t - SHOP_FLY) / (SHOP_GIVE - SHOP_FLY)
+    const from = { x: shopAt.iconX + s.obj.shop.pick * SHELF_STEP, y: shopAt.iconY }
+    const to = { x: HERO_X + Math.floor(heroW / 2) - 3, y: heroY + 2 }
+    canvas.blit(iconOf(s.obj.shop.shelf[s.obj.shop.pick]), Math.round(from.x + (to.x - from.x) * p), Math.round(from.y + (to.y - from.y) * p - Math.sin(p * Math.PI) * 6))
+  }
 
   const cells = canvas.cells()
   // effects: bursts on hits, floating numbers, the foe's name and bar
@@ -560,8 +633,11 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
     put(cells, lx, top, label, s.foe.boss ? 'redBright' : 'white', true)
     put(cells, lx, top + 1, `${bar(s.foe.hp, s.foe.maxHp, 10)} ${Math.max(0, s.foe.hp)}/${s.foe.maxHp}`, s.foe.hp / s.foe.maxHp < 0.3 ? 'red' : 'redBright')
   }
-  // the minimap: the real floor around Kaneed, one cell per tile, explored tiles only
-  if (settings.minimap) minimap(cells, s, cols, stageRows)
+  if (shopAt && s.obj?.shop) shopText(cells, s.obj, s.obj.shop, shopAt)
+  // the minimap: the real floor around Kaneed, one cell per tile, explored tiles only; it steps
+  // aside while the shop is open, since the counter stands where the map does, and stays away when
+  // the player turned it off
+  if (settings.minimap && !(s.obj?.kind === 'shop' && s.obj.t < SHOP_END)) minimap(cells, s, cols, stageRows)
 
   const banner = s.banners[0]
   const foeName = s.foe ? KINDS[SPRITE_KEYS.indexOf(s.foe.key.replace('_boss', ''))]?.name ?? s.foe.name : ''
@@ -607,8 +683,9 @@ function advance(s: Local, cols: number) {
   }
   if (s.obj) {
     s.obj.t++
+    if (s.obj.kind === 'shop' && s.obj.shop && s.obj.t === SHOP_GIVE) shopGive(s, s.obj.shop)
     // an opened chest is left behind once Kaneed walks on; the stairs go with the descent
-    if (s.obj.kind === 'chest' && s.obj.dx < -(HERO_X + 40)) s.obj = null
+    if ((s.obj.kind === 'chest' || s.obj.kind === 'shop') && s.obj.dx < -(HERO_X + 40)) s.obj = null
   }
   if (s.foe) {
     const f = s.foe
@@ -676,7 +753,7 @@ function apply(s: Local, events: GameEvent[], cols: number) {
       case 'step':
         s.scroll++
         s.walk ^= 1
-        if (s.obj?.kind === 'chest') s.obj.dx -= 2
+        if (s.obj?.kind === 'chest' || (s.obj?.kind === 'shop' && s.obj.t >= SHOP_END)) s.obj.dx -= 2
         break
       case 'engage': {
         const key = SPRITE_KEYS[e.kind] + (e.boss ? '_boss' : '')
@@ -729,6 +806,15 @@ function apply(s: Local, events: GameEvent[], cols: number) {
         for (let i = 0; i < 4; i++) s.bursts.push({ x: HERO_X + heroW + 12 + 2 + i * 2, y: 2 + (i % 2), ttl: 3 + i, big: false })
         s.hold = Math.max(s.hold, 22)
         break
+      case 'shop':
+        s.obj = { kind: 'shop', t: 0, dx: 0, shop: e }
+        s.foe = null
+        s.banners.push({ text: 'ショップを見つけた！  店長「いらっしゃい！ 好きなのを 1 つ選んでおくれ」', color: 'yellowBright', ttl: SHOP_LAND, bold: true })
+        s.banners.push(e.pick < 0
+          ? { text: `所持金 ${e.gold} G… 棚の品はどれも買えない`, color: 'yellow', ttl: SHOP_GIVE - SHOP_LAND }
+          : { text: `カニード は ${wareName(e.shelf[e.pick])} を選んだ！（${priceOf(e.shelf[e.pick], e.lv)} G）`, color: 'yellowBright', ttl: SHOP_GIVE - SHOP_LAND, bold: true })
+        s.hold = Math.max(s.hold, SHOP_END + 2)
+        break
       case 'descend':
         s.obj = { kind: 'stairs', t: 0, dx: 0 }
         s.foe = null
@@ -768,6 +854,103 @@ function apply(s: Local, events: GameEvent[], cols: number) {
   }
 }
 
+// the shop stands where a foe would: a counter with three wares on it, the keeper behind it to the
+// right, a shelf of jars on the wall when the stage is tall enough. Answers where the wares sit.
+type ShopAt = { iconX: number; iconY: number; counterY: number; keeperX: number; keeperY: number }
+function drawShop(canvas: Canvas, obj: Obj, x0: number, groundPx: number, scale: number): ShopAt {
+  const v = obj.shop!
+  const counterY = Math.max(ICON_H + 2, groundPx - 6)
+  // the keeper stands at the stage's size, like everything else on the floor
+  const keeper = stageSprite('shopkeeper', Math.max(8, canvas.hpx - 4), scale, snapAll(SHOPKEEPER))
+  const keeperX = x0 + SHELF_W + 2
+  const keeperY = groundPx - keeper.length
+  // the wall shelf and its jars, above the wares
+  const wallY = counterY - ICON_H - 9
+  if (wallY >= 3) {
+    for (let x = x0; x < keeperX + widthOf(keeper); x++) canvas.set(x, wallY, WOOD)
+    for (let i = 0; i < 5; i++) {
+      const jx = x0 + 2 + i * 9
+      const c = ['#5f87af', '#87af5f', '#af5f87', '#d7af5f', '#5fafaf'][i]
+      for (let y = wallY - 3; y < wallY; y++) for (let x = jx; x < jx + 3; x++) canvas.set(x, y, y === wallY - 3 ? '#bcbcbc' : c)
+    }
+  }
+  canvas.blit(keeper, keeperX, keeperY)
+  // the counter, in front of the keeper's legs
+  for (let y = counterY; y < groundPx; y++)
+    for (let x = x0 - 1; x < keeperX + 3; x++)
+      canvas.set(x, y, y === counterY ? WOOD_TOP : y === groundPx - 1 || (x - x0) % SHELF_STEP === 0 ? WOOD_DARK : WOOD)
+  const iconX = x0 + 2
+  const iconY = counterY - ICON_H
+  const cursor = shopCursor(v, obj.t)
+  for (let i = 0; i < v.shelf.length; i++) {
+    const x = iconX + i * SHELF_STEP
+    const bought = i === v.pick && obj.t >= SHOP_FLY
+    // the picked ware hops while it blinks
+    const lift = i === v.pick && obj.t >= SHOP_LAND && obj.t < SHOP_FLY ? (obj.t % 2) : 0
+    if (!bought) canvas.blit(iconOf(v.shelf[i]), x, iconY - lift)
+    if (i === cursor && !(obj.t >= SHOP_LAND && obj.t % 2 === 1 && i === v.pick) && obj.t < SHOP_FLY) {
+      const c = obj.t >= SHOP_LAND ? '#ffffff' : '#ffd700'
+      for (let dx = -1; dx <= ICON_W; dx++) {
+        canvas.set(x + dx, iconY - 2, c)
+        canvas.set(x + dx, counterY, c)
+      }
+      for (let dy = -2; dy <= ICON_H; dy++) {
+        canvas.set(x - 1, iconY + dy, c)
+        canvas.set(x + ICON_W, iconY + dy, c)
+      }
+    }
+  }
+  return { iconX, iconY, counterY, keeperX, keeperY }
+}
+
+// the words over the shop: a sign, the prices under the wares, the keeper's line
+function shopText(cells: Cell[][], obj: Obj, v: ShopVisit, at: ShopAt) {
+  const priceRow = Math.floor(at.counterY / 2) + 1
+  for (let i = 0; i < v.shelf.length; i++) {
+    const w = v.shelf[i]
+    const price = priceOf(w, v.lv)
+    const x = at.iconX - 1 + i * SHELF_STEP
+    if (i === v.pick && obj.t >= SHOP_FLY) put(cells, x, priceRow, ' 売約 ', '#bcbcbc', false, WOOD_DARK)
+    else put(cells, x, priceRow, `${price}G`.padStart(5), price <= v.gold ? 'yellowBright' : 'redBright', true, WOOD_DARK)
+  }
+  // the sign sits a row above the cursor's top edge
+  const signRow = Math.floor((at.iconY - 2) / 2) - 1
+  if (signRow >= 1 && obj.t < SHOP_END) put(cells, at.iconX + 6, signRow, '＊ショップ＊', 'yellowBright', true)
+  const line = obj.t < SHOP_LAND ? '「いらっしゃい！」'
+    : v.pick < 0 ? '「お金が足りないね…また来ておくれ」'
+    : obj.t < SHOP_GIVE ? `「${wareName(v.shelf[v.pick])} だね！」`
+    : '「まいどあり！」'
+  // the keeper's line, pulled left when a narrow band would cut it off
+  const width = cells[0]?.length ?? 0
+  if (obj.t < SHOP_END + 6) put(cells, Math.max(0, Math.min(at.keeperX - 2, width - cellWidth(line) - 1)), Math.max(0, Math.floor(at.keeperY / 2) - 1), line, 'whiteBright', true)
+}
+
+// the ware reaches Kaneed: the gold goes, then the heal or the new piece shows
+function shopGive(s: Local, v: ShopVisit) {
+  if (v.pick < 0) {
+    s.banners.push({ text: `所持金 ${v.gold} G では何も買えなかった… カニード はしょんぼり店を出た`, color: 'yellow', ttl: 20 })
+    return
+  }
+  const w = v.shelf[v.pick]
+  const price = priceOf(w, v.lv)
+  const heroW = widthOf(spriteOf(heroFrameKey('idle', 0)))
+  s.floats.push({ x: HERO_X + heroW + 2, y: 3, text: `-${price} G`, color: 'yellow', ttl: 16, bold: true })
+  s.victory = 10
+  if (w.kind !== 'gear') {
+    s.floats.push({ x: HERO_X + 4, y: 1, text: `+${v.healed}`, color: 'greenBright', ttl: 14, bold: true })
+    s.banners.push({ text: `${wareName(w)} を ${price} G で購入！  カニード の HP が ${v.healed} 回復した`, color: 'greenBright', ttl: 22, bold: true })
+    s.heroGlow = 14
+    return
+  }
+  const item = v.item!
+  const color = RARITY_COLORS[item.rarity - 1]
+  const good = item.better || !item.replaced
+  const verdict = !item.replaced ? '装備した' : item.better ? `${item.replaced} から持ち替え ↑ 強化` : `${item.replaced} から持ち替え ↓ 弱体化！`
+  s.banners.push({ text: `${wareName(w)} を ${price} G で購入し、${verdict}`, color: good ? color : 'red', ttl: 26, bold: item.rarity >= 4 })
+  s.floats.push({ x: HERO_X + 3, y: 0, text: good ? 'EQUIP ↑' : 'EQUIP ↓', color: good ? color : 'red', ttl: 16, bold: true })
+  s.heroGlow = 10
+}
+
 function minimap(cells: Cell[][], s: Local, cols: number, stageRows: number) {
   const sim = s.sim
   const f = sim.floor
@@ -796,6 +979,8 @@ function minimap(cells: Cell[][], s: Local, cols: number, stageRows: number) {
           case T.WALL: ch = '▒'; color = '#585858'; break
           case T.STAIRS: ch = '>'; color = 'cyanBright'; bold = true; break
           case T.CHEST: ch = '$'; color = 'yellowBright'; bold = true; break
+          case T.SHOP: ch = 'S'; color = 'magentaBright'; bold = true; break
+          case T.SHOP_CLOSED: ch = 's'; color = '#8a8a8a'; break
           default: ch = '·'; color = '#8a8a8a'
         }
       }
@@ -843,7 +1028,7 @@ function statusView(s: Local, skinId: string | undefined, header: RenderElement,
           <Text dimColor>{`歩数 ${hero.steps}   討伐 ${hero.kills}   テスト回復 ${s.heals} 回   テスト失敗 ${s.fails} 回`}</Text>
         </Box>
       </Box>
-      <Text dimColor wrap="truncate-end">{'回復は Lv アップ（50%）とテスト成功（35%）だけ。拾った装備は必ず持ち替える。倒れると Lv 1 から。✦ は魔法使いの装備'}</Text>
+      <Text dimColor wrap="truncate-end">{'回復は Lv アップ（50%）とテスト成功（35%）、ショップ（見つけたときだけ）。拾った装備は必ず持ち替える。倒れると Lv 1 から。✦ は魔法使いの装備'}</Text>
     </Box>
   )
 }
@@ -857,7 +1042,7 @@ function logView(s: Local, props: Props, header: RenderElement, rows: number, Bo
   return (
     <Box flexDirection="column">
       {header}
-      {lines.map(line => <Text wrap="truncate-end" dimColor={!/成功|レベルアップ|倒された|宝箱|手に入れ/.test(line)} color={/倒された/.test(line) ? 'red' : /成功|レベルアップ/.test(line) ? 'green' : /宝箱|手に入れ/.test(line) ? 'yellow' : undefined}>{`· ${line}`}</Text>)}
+      {lines.map(line => <Text wrap="truncate-end" dimColor={!/成功|レベルアップ|倒された|宝箱|手に入れ|ショップ|購入/.test(line)} color={/倒された/.test(line) ? 'red' : /成功|レベルアップ/.test(line) ? 'green' : /宝箱|手に入れ|ショップ|購入/.test(line) ? 'yellow' : undefined}>{`· ${line}`}</Text>)}
       {hallLines.length ? <Text bold dimColor>{'── これまでの冒険 ──'}</Text> : null}
       {hallLines.map(line => <Text dimColor wrap="truncate-end">{line}</Text>)}
     </Box>
@@ -1144,9 +1329,9 @@ function recordSection(els: Els, s: Local, d: Dash): RenderElement[] {
     factLine(els, [['撃破', `${t.kills}（ボス ${t.bossKills}）`], ['歩数', compact(d.steps)]]),
     factLine(els, [['攻撃', String(t.attacks)], ['会心', `${t.crits} (${percent(t.crits, t.attacks)})`], ['与ダメ', compact(t.dealt)]]),
     factLine(els, [['被弾', String(t.hitsTaken)], ['回避', `${t.dodges} (${percent(t.dodges, t.dodges + t.hitsTaken)})`], ['被ダメ', compact(t.taken)]]),
-    factLine(els, [['回復', `${t.healTest + t.healLevel}（テスト ${t.healTest} / Lv ${t.healLevel}）`], ['+HP', compact(t.healed)]]),
+    factLine(els, [['回復', `${t.healTest + t.healLevel + t.healShop}（テスト ${t.healTest} / Lv ${t.healLevel} / 薬 ${t.healShop}）`], ['+HP', compact(t.healed)]]),
     factLine(els, [['宝箱', String(t.chests)], ['装備', `${t.items}（弱体化 ${t.downgrades}）`]]),
-    factLine(els, [['獲得', `${compact(t.gold)} G`], ['Lv アップ', String(d.levels)]]),
+    factLine(els, [['獲得', `${compact(t.gold)} G`], ['買い物', `${t.buys}（-${compact(t.spent)} G）`], ['Lv アップ', String(d.levels)]]),
   ]
 }
 
