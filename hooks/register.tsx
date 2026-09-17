@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { testEvent } from './game/detect.ts'
 import { isHero, type Hero } from './game/hero.ts'
 import type { RunSummary } from './game/sim.ts'
-import { countEvent, countTool, dash, isTally, newTelemetry, recordContext, recordHero, recordPrompt, recordTurn, type Tally } from './game/telemetry.ts'
+import { countEvent, countTool, dash, isTally, newTelemetry, recordAgents, recordContext, recordHero, recordPrompt, recordTurn, type Tally } from './game/telemetry.ts'
 
 // The hooks module. It owns what outlives a session: Kaneed's sheet, the run number, the floor,
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
@@ -49,6 +49,9 @@ async function refreshUsage($: EngineInterface, breakdown = false) {
     ? await $.session.usage({ breakdown: 'summary' }).catch(err => { $.ui.log(`kaneed-dungeon: session.usage failed: ${err}`); return undefined })
     : await $.session.usage().catch(err => { $.ui.log(`kaneed-dungeon: session.usage failed: ${err}`); return undefined })
   if (usage) recordContext(tele, usage, await $.clock.now())
+  // the roster the session already holds: which subagent each loop was. Reading it starts nothing.
+  const agents = await $.agent.list().catch(err => { $.ui.log(`kaneed-dungeon: agent.list failed: ${err}`); return [] })
+  recordAgents(tele, agents)
 }
 
 export const register: Register = on => {

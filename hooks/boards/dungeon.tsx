@@ -874,13 +874,25 @@ function tokenSection(els: Els, d: Dash, w: number): RenderElement[] {
   const hit = cacheHitRate(t)
   if (hit !== null) lines.push(<Text dimColor wrap="truncate-end">{`入力の ${Math.round(hit * 100)}% はキャッシュから読まれた`}</Text>)
   lines.push(chartLine(els, w, 'ターン別', spark(d.turns.map(tokenTotal), sw), `${d.turns.length} 本`, 'cyanBright'))
-  // by loop: the main conversation, then each subagent by the order it first answered
-  const order = Object.keys(d.loops)
-  const loops = Object.entries(d.loops).sort((a, b) => tokenTotal(b[1]) - tokenTotal(a[1]))
-  const loopMax = Math.max(1, ...loops.map(([, v]) => tokenTotal(v)))
-  for (const [id, v] of loops) {
-    const name = id === 'main' ? 'メイン' : `サブ #${order.filter(k => k !== 'main').indexOf(id) + 1}`
-    lines.push(chartLine(els, w, name, hbar(tokenTotal(v), loopMax, sw), `${compact(tokenTotal(v))} /${v.turns}`, id === 'main' ? 'green' : 'blueBright'))
+  // by loop: the main conversation, then the subagents, those of one type counted together and
+  // named as the roster names them (an id the roster has not reached is numbered as it appeared)
+  const subs = Object.keys(d.loops).filter(id => id !== 'main')
+  const groups = new Map<string, { label: string; tokens: number; turns: number; runs: number; main: boolean }>()
+  for (const [id, loop] of Object.entries(d.loops)) {
+    const main = id === 'main'
+    const type = d.kinds[id]?.type ?? ''
+    const key = main ? 'main' : type || id
+    const group = groups.get(key) ?? { label: main ? 'メイン' : type || `サブ #${subs.indexOf(id) + 1}`, tokens: 0, turns: 0, runs: 0, main }
+    group.tokens += tokenTotal(loop)
+    group.turns += loop.turns
+    group.runs++
+    groups.set(key, group)
+  }
+  const ranked = [...groups.values()].sort((a, b) => b.tokens - a.tokens)
+  const loopMax = Math.max(1, ...ranked.map(g => g.tokens))
+  for (const group of ranked) {
+    const name = group.runs > 1 ? `${group.label} ×${group.runs}` : group.label
+    lines.push(chartLine(els, w, name, hbar(group.tokens, loopMax, sw), `${compact(group.tokens)} /${group.turns}`, group.main ? 'green' : 'blueBright'))
   }
   const models = Object.entries(d.models).sort((a, b) => tokenTotal(b[1]) - tokenTotal(a[1]))
   if (models.length > 1) {
@@ -891,6 +903,14 @@ function tokenSection(els: Els, d: Dash, w: number): RenderElement[] {
   }
   if (!d.turns.length) lines.splice(1, 0, <Text dimColor wrap="truncate-end">{'  ターンが終わると数字が入る'}</Text>)
   return lines
+}
+
+// a subagent turn reads as what the roster calls it, with the task it was given
+function agentLabel(d: Dash, agentId: string | undefined): string {
+  if (agentId === undefined) return 'プロンプトなし'
+  const kind = d.kinds[agentId]
+  if (!kind) return 'サブエージェント'
+  return kind.description ? `${kind.type || 'サブ'}: ${kind.description}` : kind.type || 'サブエージェント'
 }
 
 // which turns cost the most: the prompt each answered, what it spent, how long it ran
@@ -904,7 +924,7 @@ function heavySection(els: Els, d: Dash): RenderElement[] {
         <Text color="magenta" bold>{padCells(compact(tokenTotal(p)), 7)}</Text>
         <Text color="green">{padCells(p.usd !== undefined ? `$${p.usd.toFixed(2)}` : '', 7)}</Text>
         <Text dimColor>{padCells(duration(p.ms), 7)}</Text>
-        <Text>{p.label ?? (p.agent ? 'サブエージェント' : 'プロンプトなし')}</Text>
+        <Text>{p.label ?? agentLabel(d, p.agentId)}</Text>
       </Text>,
     )
   }

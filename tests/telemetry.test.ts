@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { cellWidth, compact, duration, hbar, padCells, resample, spark } from '../hooks/game/charts.ts'
 import { newHero } from '../hooks/game/hero.ts'
-import { addTally, cacheHitRate, countEvent, countTool, dash, HEAVY_KEEP, isTally, MINUTES_KEEP, newTally, newTelemetry, recordContext, recordHero, recordPrompt, recordTurn, tallyEvents, tokenTotal, toolLabel, TURNS_KEEP } from '../hooks/game/telemetry.ts'
+import { addTally, cacheHitRate, promptLabel, recordAgents, countEvent, countTool, dash, HEAVY_KEEP, isTally, MINUTES_KEEP, newTally, newTelemetry, recordContext, recordHero, recordPrompt, recordTurn, tallyEvents, tokenTotal, toolLabel, TURNS_KEEP } from '../hooks/game/telemetry.ts'
 import { startRun, step, takeEvents, type GameEvent } from '../hooks/game/sim.ts'
 
 const usage = (input: number, output: number, cacheRead = 0, cacheWrite = 0, model = 'claude-opus-5') =>
@@ -89,12 +89,33 @@ describe('telemetry', () => {
     recordPrompt(t, 't1', '  ダッシュボードの\n  確認をしたい  ')
     recordTurn(t, turn('t1', usage(10, 5), 1), 1)
     expect(t.turns[0].label).toBe('ダッシュボードの 確認をしたい')
+    // a turn the engine began arrives wrapped in a tag: it reads as what it is, not as markup
+    expect(promptLabel('<task-notification>\n  Explore finished\n</task-notification>')).toBe('仕事の終わりの知らせ')
+    expect(promptLabel('<agent-message from="a15a6">done</agent-message>')).toBe('エージェントからの連絡')
+    expect(promptLabel('<odd-wrapper>x</odd-wrapper>')).toBe('odd-wrapper')
+    expect(promptLabel('<3 のような書き出しはそのまま')).toBe('<3 のような書き出しはそのまま')
     // the label is handed over once: a turn id never labels a second turn
     expect(t.labels).toEqual({})
     for (let i = 0; i < TURNS_KEEP + 10; i++) recordTurn(t, turn(`x${i}`, usage(i, 0), i + 2), i + 2)
     expect(t.turns.length).toBe(TURNS_KEEP)
     expect(t.heavy.length).toBe(HEAVY_KEEP)
     expect(t.heavy.map(tokenTotal)).toEqual([209, 208, 207, 206, 205])
+  })
+  test('the roster names the loops the turns were counted under', () => {
+    const t = newTelemetry(0)
+    recordTurn(t, turn('t1', usage(10, 5), 1, 'agent-1'), 1)
+    expect(t.kinds).toEqual({})
+    recordAgents(t, [
+      { id: 'agent-1', type: 'Explore', description: '認証まわりの実装を探す' },
+      { id: 'agent-2', type: '', description: '', name: 'reviewer' },
+      { id: 'agent-3' },
+    ])
+    expect(t.kinds['agent-1']).toEqual({ type: 'Explore', description: '認証まわりの実装を探す' })
+    // a roster entry with a name but no type is named by it; one with neither says nothing
+    expect(t.kinds['agent-2']).toEqual({ type: 'reviewer', description: '' })
+    expect(t.kinds['agent-3']).toBeUndefined()
+    expect(t.turns[0].agentId).toBe('agent-1')
+    expect(dash(t).kinds['agent-1'].type).toBe('Explore')
   })
   test('a turn is priced by how far the cost ledger rose while it ran', () => {
     const t = newTelemetry(0)

@@ -9,8 +9,10 @@ export type Tokens = { input: number; output: number; cacheRead: number; cacheWr
 export type ApiUsage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
 // one finished turn: what it spent, how long it took, and (main turns only) the prompt it answered
 // and the dollars the cost ledger moved by while it ran
-export type TurnPoint = Tokens & { at: number; ms: number; agent: boolean; turnId: string; model: string; reason: string; usd?: number; label?: string }
+export type TurnPoint = Tokens & { at: number; ms: number; agent: boolean; agentId?: string; turnId: string; model: string; reason: string; usd?: number; label?: string }
 export type Loop = Tokens & { turns: number }
+// what the session knows about a subagent it ran: the type the Agent tool dispatched and the task
+export type AgentKind = { type: string; description: string }
 export type RateLimit = { kind: string; percentUsed: number; resetsAt?: string }
 // one row of the context breakdown, as /context lists it
 export type ContextSlice = { name: string; tokens: number; kind: string }
@@ -54,6 +56,8 @@ export type Telemetry = {
   // per model id, and per loop: 'main' and one key per subagent id
   models: Record<string, Loop>
   loops: Record<string, Loop>
+  // what each subagent id is, as the roster names it; empty until the roster is read
+  kinds: Record<string, AgentKind>
   context: Context
   // the prompt each running main turn started with, by turn id, until its turn ends
   labels: Record<string, string>
@@ -83,7 +87,7 @@ export const newTally = (): Tally => ({
 export const newTelemetry = (now: number): Telemetry => ({
   startedAt: now, events: {}, tools: {}, perMinute: [], minuteBase: 0, turns: [], heavy: [],
   totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, mainTurns: 0, agentTurns: 0, agents: [],
-  models: {}, loops: {}, context: { usd: null, percent: null, tokens: null, window: null, rateLimits: [], breakdown: null },
+  models: {}, loops: {}, kinds: {}, context: { usd: null, percent: null, tokens: null, window: null, rateLimits: [], breakdown: null },
   labels: {}, costAt: null, tally: newTally(), steps: 0, deaths: 0, levels: 0, maxFloor: 1, maxLv: 1, lastHero: null,
 })
 
@@ -125,11 +129,29 @@ export function countTool(t: Telemetry, tool: string, now: number) {
   countEvent(t, 'ツール', now)
 }
 
+// Some turns are begun by the engine rather than typed: they arrive wrapped in a tag, which reads
+// as what it is rather than as markup.
+const WRAPPED: Record<string, string> = {
+  'task-notification': '仕事の終わりの知らせ',
+  'agent-message': 'エージェントからの連絡',
+  'system-reminder': 'システムからの注意書き',
+  'local-command-stdout': 'コマンドの出力',
+  'command-message': 'コマンドの実行',
+  'user-prompt-submit-hook': 'フックからの差し込み',
+}
+
+export function promptLabel(text: string): string {
+  const line = text.replace(/\s+/g, ' ').trim()
+  const tag = /^<([a-z][a-z-]*)[\s>]/.exec(line)?.[1]
+  if (!tag) return line.slice(0, LABEL_CHARS)
+  return WRAPPED[tag] ?? tag
+}
+
 // the prompt a main turn begins with, kept until that turn ends and takes it as its label
 export function recordPrompt(t: Telemetry, turnId: string, text: string) {
-  const line = text.replace(/\s+/g, ' ').trim()
+  const line = promptLabel(text)
   if (!line) return
-  t.labels[turnId] = line.slice(0, LABEL_CHARS)
+  t.labels[turnId] = line
   const keys = Object.keys(t.labels)
   for (const key of keys.slice(0, Math.max(0, keys.length - LABELS_KEEP))) delete t.labels[key]
 }
@@ -157,7 +179,7 @@ export function recordTurn(t: Telemetry, { usage, ms, agentId, turnId, reason }:
   delete t.labels[turnId]
   if (!usage) return
   const point: TurnPoint = {
-    at: now, ms, agent, turnId, reason, model: usage.model ?? '', ...(label ? { label } : {}),
+    at: now, ms, agent, turnId, reason, model: usage.model ?? '', ...(agentId ? { agentId } : {}), ...(label ? { label } : {}),
     input: usage.input_tokens, output: usage.output_tokens, cacheRead: usage.cache_read_input_tokens, cacheWrite: usage.cache_creation_input_tokens,
   }
   addTokens(t.totals, point)
@@ -200,6 +222,16 @@ export type UsageReading = {
   rateLimits?: RateLimit[]
 }
 export type BreakdownReading = { categories?: { name: string; tokens: number; kind: string }[]; totalTokens?: number; rawMaxTokens?: number; percentage?: number; model?: string }
+
+// the subagents the session has run, as `$.agent.list()` reports them: reading the roster starts
+// nothing and costs nothing, it only names the loops the turns already counted
+export function recordAgents(t: Telemetry, agents: readonly { id: string; type?: string; description?: string; name?: string }[]) {
+  for (const agent of agents) {
+    const type = agent.type || agent.name || ''
+    if (!type && !agent.description) continue
+    t.kinds[agent.id] = { type, description: agent.description ?? '' }
+  }
+}
 
 export function recordContext(t: Telemetry, usage: UsageReading, now = 0) {
   const breakdown = usage.context?.breakdown
@@ -301,6 +333,7 @@ export const dash = (t: Telemetry): Dash => ({
   mainTurns: t.mainTurns, agentTurns: t.agentTurns, agentCount: t.agents.length,
   models: Object.fromEntries(Object.entries(t.models).map(([k, v]) => [k, { ...v }])),
   loops: Object.fromEntries(Object.entries(t.loops).map(([k, v]) => [k, { ...v }])),
+  kinds: Object.fromEntries(Object.entries(t.kinds).map(([k, v]) => [k, { ...v }])),
   context: { ...t.context, rateLimits: t.context.rateLimits.map(r => ({ ...r })), breakdown: t.context.breakdown ? { ...t.context.breakdown, slices: t.context.breakdown.slices.map(s => ({ ...s })) } : null },
   tally: { ...t.tally }, steps: t.steps, deaths: t.deaths, levels: t.levels, maxFloor: t.maxFloor, maxLv: t.maxLv,
 })
