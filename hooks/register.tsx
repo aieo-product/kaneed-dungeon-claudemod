@@ -3,6 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import { testEvent } from './game/detect.ts'
 import { isHero, type Hero } from './game/hero.ts'
 import type { RunSummary } from './game/sim.ts'
+import { applySetting, bandRows, DEFAULTS, readSettings, type Settings } from './game/settings.ts'
 import { countEvent, countTool, dash, isTally, newTelemetry, recordAgents, recordContext, recordHero, recordPrompt, recordTurn, type Tally } from './game/telemetry.ts'
 import { CHECK_EVERY_MS, isNewer, MANIFEST_URL, versionIn } from './game/update.ts'
 
@@ -17,7 +18,8 @@ import { CHECK_EVERY_MS, isNewer, MANIFEST_URL, versionIn } from './game/update.
 // It also keeps this session's telemetry (./game/telemetry.ts) for the dashboard tab: every event
 // it catches, the tokens each turn spent, and Kaneed's progress at each save. Memory only.
 
-type View = 'game' | 'dash' | 'status' | 'log'
+type View = 'game' | 'dash' | 'status' | 'log' | 'settings'
+type Choice = { type: 'settings'; settings: unknown }
 type Save = { type: 'save'; hero: Hero; floorNum: number; log: string[]; dead?: RunSummary | null; levels?: number; tally?: Tally }
 
 const LOG_KEEP = 300
@@ -33,12 +35,17 @@ let heals = 0
 let fails = 0
 let view: View = 'game'
 let tele = newTelemetry(0)
+let settings: Settings = DEFAULTS
+// how many rows the engine last offered the band: what the height setting is measured against
+let room = 0
 let visible = true
 let saving = false
 let working = false
 // the band draws once the store has been read: a board mounted before that would start a fresh
 // Kaneed over the saved one, and then save it
 let ready = false
+
+const isChoice = (v: unknown): v is Choice => typeof v === 'object' && v !== null && (v as Choice).type === 'settings'
 
 // The update notice. A third-party marketplace does not update itself unless the person turned
 // auto-update on, so once a day the plugin reads the manifest on the default branch and says, in a
@@ -87,6 +94,7 @@ export const register: Register = (on, options) => {
     history = Array.isArray(savedLog) ? savedLog.filter((l): l is string => typeof l === 'string') : []
     const savedHall = await stored('hall')
     hall = Array.isArray(savedHall) ? (savedHall as RunSummary[]) : []
+    settings = readSettings(await stored('settings'))
     const now = await $.clock.now()
     seed = now >>> 0
     tele = newTelemetry(now)
@@ -98,7 +106,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'kaneed',
       description: 'カニード のダンジョン探索: ゲーム画面 / dash / status / log / hide / show (kaneed-dungeon)',
-      argumentHint: '[dash | status | log | hide | show]',
+      argumentHint: '[dash | status | log | settings | set <項目> <値> | hide | show]',
       immediate: true,
     }).catch(err => $.ui.log(`kaneed-dungeon: /kaneed not registered: ${err}`))
     return r
@@ -106,13 +114,26 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'kaneed' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
+    // `/kaneed set <what> <value>`: the settings screen's choices, from the keyboard
+    if (arg.startsWith('set ')) {
+      const result = applySetting(settings, arg.slice(4).trim().split(/\s+/))
+      if (result.settings !== settings) {
+        settings = result.settings
+        await $.store.set('settings', settings).catch(err => $.ui.log(`kaneed-dungeon: store write failed: ${err}`))
+      }
+      visible = true
+      view = 'settings'
+      $.ui.invalidate('ui.render')
+      return { text: `カニード · ${result.message}` }
+    }
     if (arg === 'hide' || arg === 'stop' || arg === 'close') {
       visible = false
       $.ui.invalidate('ui.render')
       return { text: 'カニード の画面を閉じた。/kaneed で再表示（探索は止まる）' }
     }
     visible = true
-    if (arg === 'status' || arg === 'st') view = 'status'
+    if (arg === 'settings' || arg === 'config' || arg === 'set') view = 'settings'
+    else if (arg === 'status' || arg === 'st') view = 'status'
     else if (arg === 'log' || arg === 'history') view = 'log'
     else if (arg === 'dash' || arg === 'dashboard' || arg === 'stats') {
       view = 'dash'
@@ -178,8 +199,14 @@ export const register: Register = (on, options) => {
     return r
   })
 
-  // the board posts its state after a tick; keep what outlives the session
+  // the board posts its state after a tick, and a pressed setting when the player changes one
   on('ui.message', async ($, e, next) => {
+    if (isChoice(e.data)) {
+      settings = readSettings(e.data.settings)
+      await $.store.set('settings', settings).catch(err => $.ui.log(`kaneed-dungeon: store write failed: ${err}`))
+      $.ui.invalidate('ui.render')
+      return { props: props() }
+    }
     if (!isSave(e.data)) return next(e)
     const data = e.data
     hero = data.hero
@@ -200,7 +227,7 @@ export const register: Register = (on, options) => {
     return { props: props() }
   })
 
-  const props = () => ({ view, working, seed, saved: hero, run, floorNum, heals, fails, history: history.slice(-40), hall: hall.slice(-8), ...(view === 'dash' ? { dash: dash(tele) } : {}) })
+  const props = () => ({ view, working, seed, saved: hero, run, floorNum, heals, fails, settings, room, history: history.slice(-40), hall: hall.slice(-8), ...(view === 'dash' ? { dash: dash(tele) } : {}) })
   // (a Client's props are plain data: a key holding undefined is refused, so the dashboard's is left out)
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -208,8 +235,9 @@ export const register: Register = (on, options) => {
     working = e.props.isWorking
     const { Box, Button, Client, Text } = await $.ui.resolve(e)
     const cols = e.props.bodyColumns ?? e.viewport?.columns ?? 80
-    // the stage wants every row it can get: sprites shrink to fit a short band
-    const rows = Math.max(9, Math.min(22, e.props.maxRows - 1))
+    // as tall as the player asked for, inside what the terminal has room for
+    room = e.props.maxRows
+    const rows = bandRows(settings, e.props.maxRows)
     const pick = (v: View) => async () => {
       view = v
       if (v === 'dash') await refreshUsage($, true)
@@ -227,6 +255,7 @@ export const register: Register = (on, options) => {
           {tab('dash', 'ダッシュボード')}
           {tab('status', 'ステータス')}
           {tab('log', '履歴')}
+          {tab('settings', '設定')}
           <Button key="kaneed:close" label="閉じる" onPress={close} />
           <Text dimColor>{e.props.isWorking ? ' カニード は探索中' : ' Claude の応答待ち: カニード は休憩中'}</Text>
         </Box>
