@@ -83,7 +83,7 @@ if [ "$DRY" = 0 ]; then
     --body "$(printf '%s\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n' "$NOTES")" >/dev/null
   gh pr merge "$BRANCH" --merge --delete-branch >/dev/null
   git checkout -q main
-  git pull -q
+  git pull -q --ff-only origin main
 else
   echo "  (dry-run) gh pr create / gh pr merge"
   git checkout -q main
