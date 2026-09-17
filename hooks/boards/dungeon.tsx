@@ -9,6 +9,7 @@ import { EQUIP_ANCHORS, FALLBACK_ANCHORS, HERO_ANCHORS, HERO_OFFSETS, SPRITES, t
 import { layerOffset } from './anchors.ts'
 import { compact, duration, hbar, padCells, spark } from '../game/charts.ts'
 import { cacheHitRate, newTally, tallyEvents, tokenTotal, type Dash, type Tally } from '../game/telemetry.ts'
+import { bandRows, DEFAULTS, ROW_CHOICES, SCALE_CHOICES, SKIN_IDS, wantScale as scaleWanted, type Settings } from '../game/settings.ts'
 
 // The board: a surface module on the drawing thread. The dungeon is simulated in ticks of half a
 // second (../game/sim.ts); this file turns each tick's events into a side-scrolling scene drawn ten
@@ -22,7 +23,7 @@ import { cacheHitRate, newTally, tallyEvents, tokenTotal, type Dash, type Tally 
 // Never name a local `h` in this file: every JSX tag compiles to a call of `h`.
 
 type Props = {
-  view?: 'game' | 'dash' | 'status' | 'log'
+  view?: 'game' | 'dash' | 'status' | 'log' | 'settings'
   working?: boolean
   seed?: number
   saved?: Hero | null
@@ -33,6 +34,8 @@ type Props = {
   history?: string[]
   hall?: RunSummary[]
   dash?: Dash
+  settings?: Settings
+  room?: number
 } | undefined
 
 const FRAME_MS = 100
@@ -245,6 +248,60 @@ function put(cells: Cell[][], x: number, y: number, text: string, fg?: string, b
 
 const spriteOf = (key: string): Pixels => SPRITES[key] ?? SPRITES.slime
 
+// The figures the player can pick. The drawn frames are カニード's; a skin turns its hue on the way
+// to the canvas, which leaves the white eyes and the near-black mouth alone (they carry no hue).
+// `figure` names a different set of frames instead of recolouring.
+export type Skin = { id: string; label: string; short: string; hue?: number; figure?: string }
+export const SKINS: Skin[] = [
+  { id: 'kaneed', label: 'カニード（朱）', short: '朱' },
+  { id: 'ai', label: 'カニード（藍）', short: '藍', hue: 205 },
+  { id: 'midori', label: 'カニード（翠）', short: '翠', hue: 135 },
+  { id: 'murasaki', label: 'カニード（紫）', short: '紫', hue: 285 },
+  { id: 'kin', label: 'カニード（金）', short: '金', hue: 45 },
+  { id: 'fallback', label: 'フォールバック像', short: '像', figure: 'fallback' },
+]
+export const skinOf = (id: string | undefined) => SKINS.find(s => s.id === id) ?? SKINS[0]
+
+// カニード's shell sits around this hue; a skin's hue replaces it, so every variant is the colour
+// it says rather than a rotation away from it
+const BASE_HUE = 20
+const hueOf = (r: number, g: number, b: number) => {
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  if (max === min) return { h: 0, sat: 0, max, min }
+  const d = max - min
+  const h = max === r ? ((g - b) / d + (g < b ? 6 : 0)) : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+  return { h: h * 60, sat: d / max, max, min }
+}
+function turnHue(hex: string, hue: number): string {
+  if (!hex.startsWith('#') || hex.length !== 7) return hex
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
+  const { h, sat, max, min } = hueOf(r, g, b)
+  // grey pixels (the eyes, the mouth, the outline) have no hue to turn
+  if (sat < 0.12) return hex
+  const l = (max + min) / 2 / 255
+  const s = max === min ? 0 : (max - min) / (l > 0.5 ? 510 - max - min : max + min)
+  const H = (((h - BASE_HUE + hue) % 360) + 360) % 360
+  const c = (1 - Math.abs(2 * l - 1)) * s
+  const x = c * (1 - Math.abs(((H / 60) % 2) - 1))
+  const m = l - c / 2
+  const [rr, gg, bb] = H < 60 ? [c, x, 0] : H < 120 ? [x, c, 0] : H < 180 ? [0, c, x] : H < 240 ? [0, x, c] : H < 300 ? [x, 0, c] : [c, 0, x]
+  return snap256('#' + [rr, gg, bb].map(v => hex2(Math.round((v + m) * 255))).join(''))
+}
+
+const skinCache = new Map<string, Pixels>()
+// the frame `key` as the skin draws it: a different figure, a turned hue, or the frame itself
+function skinned(key: string, skin: Skin): Pixels {
+  if (skin.figure) return spriteOf(SPRITES[skin.figure] ? skin.figure : key)
+  if (skin.hue === undefined) return spriteOf(key)
+  const id = `${skin.id}:${key}`
+  const hit = skinCache.get(id)
+  if (hit) return hit
+  const out = spriteOf(key).map(row => row.map(c => (c ? turnHue(c, skin.hue as number) : null)))
+  skinCache.set(id, out)
+  return out
+}
+
 // The hero: frames from tools/sprites/hero/ when they exist (hero_idle_0, hero_walk_1, ...), else
 // the single Kaneed figure. Equipment layers (equip_<slot>_<tier>) are laid over the body, back to
 // front, shifted by the frame's offset so they follow the body's bob.
@@ -261,50 +318,72 @@ function heroFrameKey(pose: HeroPose, alt: number): string {
   if (SPRITES[`hero_idle_${alt % 2}`]) return `hero_idle_${alt % 2}`
   return SPRITES.hero_idle_0 ? 'hero_idle_0' : 'kaneed'
 }
-function drawHero(canvas: Canvas, hero: Hero, pose: HeroPose, alt: number, x: number, y: number, maxH: number, tint?: (c: string) => string): Pixels {
+function drawHero(canvas: Canvas, hero: Hero, pose: HeroPose, alt: number, x: number, y: number, maxH: number, scale: number, skin: Skin, tint?: (c: string) => string): Pixels {
   const key = heroFrameKey(pose, alt)
-  const body = fit(spriteOf(key), key, maxH)
+  const figure = skinned(key, skin)
+  const grown = Math.min(scale, maxH / Math.max(1, figure.length))
+  const body = scaled(figure, `${skin.id}:${key}`, grown)
   canvas.blit(body, x, y, tint)
-  // layers are drawn only when the body was not shrunk, since they share its canvas
-  if (body === SPRITES[key]) {
+  // Layers share the body's canvas, so they follow its factor: the anchor point is the same point,
+  // scaled. A body that had to be shrunk to fit wears nothing.
+  if (grown >= 1) {
     const frame = key.replace('hero_', '')
     // the fallback figure has its own anchor table; the hero frames share theirs
-    const anchors = key === 'fallback' ? FALLBACK_ANCHORS : HERO_ANCHORS
+    const anchors = skin.figure === 'fallback' ? FALLBACK_ANCHORS : HERO_ANCHORS
     for (const slot of EQUIP_ORDER) {
       const item = hero.equipment[slot]
       const layerKey = item ? `equip_${slot}_${item.tier}` : ''
       const layer = layerKey ? SPRITES[layerKey] : undefined
       if (!layer) continue
       const [dx, dy] = layerOffset(frame, slot, layerKey, anchors, EQUIP_ANCHORS, HERO_OFFSETS[frame])
-      canvas.blit(layer, x + dx, y + dy, tint)
+      canvas.blit(scaled(layer, layerKey, grown), x + Math.round(dx * grown), y + Math.round(dy * grown), tint)
     }
   }
   return body
 }
 
-// nearest-neighbour shrink so a sprite fits a short stage (never enlarges)
-const fitCache = new Map<string, Pixels>()
-function fit(px: Pixels, key: string, maxH: number): Pixels {
-  if (px.length <= maxH) return px
-  const id = `${key}:${maxH}`
-  const hit = fitCache.get(id)
+// The size everything on the stage is drawn at: the hero fills the height it has, and every other
+// figure is drawn at the same factor, so they keep their sizes relative to each other. A whole
+// number is preferred (a doubled pixel stays square); a band too short for the next whole step
+// still fills, at the fraction that fits.
+export function stageScale(spriteH: number, maxH: number, want: number): number {
+  const fill = maxH / Math.max(1, spriteH)
+  if (fill < 1) return fill
+  const whole = Math.floor(Math.min(fill, want))
+  return want <= fill ? want : whole >= 2 ? whole : Math.min(fill, want)
+}
+
+// nearest-neighbour resize, any factor; 1 hands back the sprite as it is
+const zoomCache = new Map<string, Pixels>()
+function scaled(px: Pixels, key: string, scale: number): Pixels {
+  if (scale === 1 || !px.length) return px
+  const id = `${key}:${scale.toFixed(3)}`
+  const hit = zoomCache.get(id)
   if (hit) return hit
-  const scale = maxH / px.length
+  const h = Math.max(1, Math.round(px.length * scale))
   const w = Math.max(1, Math.round(widthOf(px) * scale))
   const out: Pixels = []
-  for (let y = 0; y < maxH; y++) {
-    const sy = Math.min(px.length - 1, Math.floor(y / scale))
+  for (let y = 0; y < h; y++) {
+    const row = px[Math.min(px.length - 1, Math.floor(y / scale))]
     const line: (string | null)[] = []
-    for (let x = 0; x < w; x++) line.push(px[sy][Math.min(px[sy].length - 1, Math.floor(x / scale))])
+    for (let x = 0; x < w; x++) line.push(row[Math.min(row.length - 1, Math.floor(x / scale))])
     out.push(line)
   }
-  fitCache.set(id, out)
+  zoomCache.set(id, out)
   return out
 }
+
+// a sprite at the stage's scale, never taller than the room it has
+function stageSprite(key: string, avail: number, scale: number, px = spriteOf(key)): Pixels {
+  return scaled(px, key, Math.min(scale, avail / Math.max(1, px.length)))
+}
+
 const widthOf = (px: Pixels) => px[0]?.length ?? 0
 
 export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
-  const { Box, Text } = surface.elements
+  const { Box, Button, Text } = surface.elements
+  // a setting the player pressed: the hooks module stores it and hands it back with the next draw
+  const change = (next: Settings) => surface.post({ type: 'settings', settings: next })
   const now = Date.now()
 
   if (surface.state === undefined) {
@@ -399,9 +478,10 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
     </Text>
   )
 
-  if (props?.view === 'status') return statusView(s, header, Box, Text)
+  if (props?.view === 'status') return statusView(s, props?.settings?.skin, header, Box, Text)
   if (props?.view === 'log') return logView(s, props, header, rows, Box, Text)
   if (props?.view === 'dash') return dashView(s, props.dash, header, cols, rows, Box, Text)
+  if (props?.view === 'settings') return settingsView(props, header, change, Box, Text, Button)
 
   // ---- the stage ----
   const stageRows = rows - 2
@@ -422,21 +502,28 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
       else canvas.set(x, y, (x + s.scroll * 2 + y * 3) % 9 === 0 ? FLOOR_DOT : y === groundPx + 1 ? '#4e4e4e' : FLOOR)
     }
   }
-  // the object Kaneed found stands where a foe would
+  // Everything standing on the floor is drawn at one whole-number scale, so the figures keep their
+  // sizes relative to each other: as many doublings as the hero has room for, up to what is asked.
+  const settings = { ...DEFAULTS, ...props?.settings }
+  const skin = skinOf(settings.skin)
   const heroKey0 = heroFrameKey('idle', 0)
-  const heroPx = fit(spriteOf(heroKey0), heroKey0, canvas.hpx - 4)
+  const heroArt = skinned(heroKey0, skin)
+  const scale = stageScale(heroArt.length, canvas.hpx - 4, scaleWanted(settings))
+  const heroPx = stageSprite(heroKey0, canvas.hpx - 4, scale, heroArt)
   const heroW = widthOf(heroPx)
   const frontX = HERO_X + heroW + 12
   if (s.obj) {
-    if (s.obj.kind === 'chest') canvas.blit(s.obj.t >= 6 ? chestOpen : chestClosed, frontX + s.obj.dx, groundPx - 8)
-    else canvas.blit(stairs, frontX, groundPx - 10)
+    const chest = scaled(s.obj.t >= 6 ? chestOpen : chestClosed, s.obj.t >= 6 ? 'chest_open' : 'chest_closed', scale)
+    const well = scaled(stairs, 'stairs', scale)
+    if (s.obj.kind === 'chest') canvas.blit(chest, frontX + s.obj.dx, groundPx - chest.length)
+    else canvas.blit(well, frontX, groundPx - well.length + Math.round(2 * scale))
   }
   // the foe, bobbing in counter-phase, flashing when hit, flickering out when slain
   // the foe's three idle frames (rest, squash, stretch) loop while it stands; the lunge stretches
   // on the way in and squashes on contact; a dying foe holds its rest frame
   const foeFrame = !s.foe ? '' : s.foe.state === 'dying' ? '' : s.foeDx <= -3 ? '_1' : s.foeDx < 0 ? '_2' : ['', '_1', '', '_2'][Math.floor(s.frame / 6) % 4]
   const foeKey = s.foe ? (SPRITES[s.foe.key + foeFrame] ? s.foe.key + foeFrame : s.foe.key) : ''
-  const foePx = s.foe ? fit(spriteOf(foeKey), foeKey, s.foe.boss ? canvas.hpx - 3 : canvas.hpx - 5) : null
+  const foePx = s.foe ? stageSprite(foeKey, s.foe.boss ? canvas.hpx - 3 : canvas.hpx - 5, scale) : null
   if (s.foe && foePx && !(s.foe.state === 'dying' && s.foe.t % 2 === 1)) {
     const bob = Math.floor(s.frame / 6 + 3) % 2
     // a hit reads as a white flash (a colour tint would muddy a green or blue foe)
@@ -455,7 +542,7 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
   const pose: HeroPose = s.dead ? 'dead' : s.heroFlash > 0 ? 'hurt' : s.heroDx > 0 ? 'attack' : s.victory > 0 ? 'victory' : walking ? 'walk' : 'idle'
   // the idle loop advances every 0.8 s; walking alternates per step; the strike has two frames
   const alt = walking ? s.walk : s.heroDx > 0 ? (s.heroDx >= 3 ? 1 : 0) : Math.floor(s.frame / 8)
-  drawHero(canvas, hero, pose, alt, HERO_X + s.heroDx, heroY, canvas.hpx - 4, heroTint)
+  drawHero(canvas, hero, pose, alt, HERO_X + Math.round(s.heroDx * scale), heroY, canvas.hpx - 4, scale, skin, heroTint)
 
   const cells = canvas.cells()
   // effects: bursts on hits, floating numbers, the foe's name and bar
@@ -477,7 +564,7 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
     put(cells, lx, top + 1, `${bar(s.foe.hp, s.foe.maxHp, 10)} ${Math.max(0, s.foe.hp)}/${s.foe.maxHp}`, s.foe.hp / s.foe.maxHp < 0.3 ? 'red' : 'redBright')
   }
   // the minimap: the real floor around Kaneed, one cell per tile, explored tiles only
-  minimap(cells, s, cols, stageRows)
+  if (settings.minimap) minimap(cells, s, cols, stageRows)
 
   const banner = s.banners[0]
   const foeName = s.foe ? KINDS[SPRITE_KEYS.indexOf(s.foe.key.replace('_boss', ''))]?.name ?? s.foe.name : ''
@@ -724,16 +811,17 @@ function minimap(cells: Cell[][], s: Local, cols: number, stageRows: number) {
 }
 
 // the status sheet: the big Kaneed (the same sprite, breathing), its numbers, its five slots
-function statusView(s: Local, header: RenderElement, Box: ClientElements['Box'], Text: ClientElements['Text']) {
+function statusView(s: Local, skinId: string | undefined, header: RenderElement, Box: ClientElements['Box'], Text: ClientElements['Text']) {
   const hero = s.sim.hero
   const st = stats(hero)
   const hpRatio = st.maxHp ? hero.hp / st.maxHp : 0
   const lowHp = hpRatio <= 0.25
-  const heroPx = spriteOf(heroFrameKey('idle', 0))
+  const skin = skinOf(skinId)
+  const heroPx = skinned(heroFrameKey('idle', 0), skin)
   const canvas = new Canvas(widthOf(heroPx) + 4, heroPx.length + 4)
   for (let i = 0; i < canvas.buf.length; i++) canvas.buf[i] = '#12100D'
   const bob = Math.floor(s.frame / 8) % 2
-  drawHero(canvas, hero, s.dead ? 'dead' : 'idle', bob, 2, 2 + bob - (s.dead ? -1 : 0), 99, s.dead ? (c: string) => gray(c) : lowHp && s.frame % 10 < 5 ? (c: string) => mix(c, '#ff4040', 0.25) : undefined)
+  drawHero(canvas, hero, s.dead ? 'dead' : 'idle', bob, 2, 2 + bob - (s.dead ? -1 : 0), 99, 1, skin, s.dead ? (c: string) => gray(c) : lowHp && s.frame % 10 < 5 ? (c: string) => mix(c, '#ff4040', 0.25) : undefined)
   const portrait = canvas.cells().map(line => row(Text, line))
   const lines = SLOTS.map(slot => {
     const item = hero.equipment[slot]
@@ -775,6 +863,58 @@ function logView(s: Local, props: Props, header: RenderElement, rows: number, Bo
       {lines.map(line => <Text wrap="truncate-end" dimColor={!/成功|レベルアップ|倒された|宝箱|手に入れ/.test(line)} color={/倒された/.test(line) ? 'red' : /成功|レベルアップ/.test(line) ? 'green' : /宝箱|手に入れ/.test(line) ? 'yellow' : undefined}>{`· ${line}`}</Text>)}
       {hallLines.length ? <Text bold dimColor>{'── これまでの冒険 ──'}</Text> : null}
       {hallLines.map(line => <Text dimColor wrap="truncate-end">{line}</Text>)}
+    </Box>
+  )
+}
+
+// ---- the settings: what the player chose about the band ----
+// One button per setting: pressing it takes the next choice, and the press posts the whole set back
+// to the hooks module, which stores it and hands it back as props. Each has a digit of its own, so
+// the band is settable from the keyboard (a digit presses from an empty composer) as well as by
+// pointer.
+const next = <T,>(choices: readonly T[], now: T): T => choices[(choices.findIndex(c => c === now) + 1) % choices.length]
+const rowsLabel = (v: number | 'auto') => (v === 'auto' ? '自動' : `${v} 行`)
+const scaleLabel = (v: number | 'auto') => (v === 'auto' ? '自動（高さいっぱい）' : `×${v}`)
+
+// what the choices come to on this terminal: a band that cannot fit the size asked for draws at
+// the largest that does fit, and saying so beats leaving the player wondering
+function drawnAt(settings: Settings, room: number): string {
+  if (!room) return ''
+  const rows = bandRows(settings, room)
+  const avail = (rows - 2) * 2 - 4
+  const hero = skinned(heroFrameKey('idle', 0), skinOf(settings.skin)).length
+  const scale = stageScale(hero, avail, scaleWanted(settings))
+  const size = Number.isInteger(scale) ? `×${scale}` : `×${scale.toFixed(2)}`
+  return `いま帯に使える高さ ${room} 行 → 帯 ${rows} 行、キャラクターは ${size}（${Math.round(hero * scale / 2)} 行ぶん）で描かれる`
+}
+
+function settingsView(
+  props: Props,
+  header: RenderElement,
+  change: (next: Settings) => void,
+  Box: ClientElements['Box'],
+  Text: ClientElements['Text'],
+  Button: ClientElements['Button'],
+) {
+  const settings: Settings = { ...DEFAULTS, ...props?.settings }
+  const skin = skinOf(settings.skin)
+  const line = (hotkey: string, label: string, value: string, note: string, take: Settings) => (
+    <Box flexDirection="row" columnGap={1}>
+      <Button key={`kaneed:set:${hotkey}`} hotkey={hotkey} plain label={`${padCells(label, 22)}${value}`} onPress={() => change(take)} />
+      <Text dimColor>{`  ${note}`}</Text>
+    </Box>
+  )
+  return (
+    <Box flexDirection="column">
+      {header}
+      <Text color="cyan" bold>{'▌設定'}</Text>
+      {line('1', '帯の高さ', rowsLabel(settings.rows), ROW_CHOICES.map(rowsLabel).join(' / '), { ...settings, rows: next(ROW_CHOICES, settings.rows) })}
+      {line('2', 'キャラクターの大きさ', scaleLabel(settings.scale), SCALE_CHOICES.map(scaleLabel).join(' / '), { ...settings, scale: next(SCALE_CHOICES, settings.scale) })}
+      {line('3', 'ミニマップ', settings.minimap ? '表示' : '非表示', '表示 / 非表示', { ...settings, minimap: !settings.minimap })}
+      {line('4', '主人公', skin.label, SKINS.map(sk => sk.short).join(' / '), { ...settings, skin: next(SKIN_IDS, settings.skin) })}
+      {line('5', '初期値に戻す', '', '高さも大きさも主人公も最初の状態へ', { ...DEFAULTS })}
+      <Text dimColor>{'ボタンを押すと次の選択肢へ。キーボードからは /kaneed set rows 16 のように指定する'}</Text>
+      <Text dimColor>{drawnAt(settings, props?.room ?? 0)}</Text>
     </Box>
   )
 }
