@@ -1190,9 +1190,9 @@ function recordSection(els: Els, s: Local, d: Dash): RenderElement[] {
     factLine(els, [['撃破', `${t.kills}（ボス ${t.bossKills}）`], ['歩数', compact(d.steps)]]),
     factLine(els, [['攻撃', String(t.attacks)], ['会心', `${t.crits} (${percent(t.crits, t.attacks)})`], ['与ダメ', compact(t.dealt)]]),
     factLine(els, [['被弾', String(t.hitsTaken)], ['回避', `${t.dodges} (${percent(t.dodges, t.dodges + t.hitsTaken)})`], ['被ダメ', compact(t.taken)]]),
-    factLine(els, [['回復', `${t.healTest + t.healLevel}（テスト ${t.healTest} / Lv ${t.healLevel}）`], ['+HP', compact(t.healed)]]),
+    factLine(els, [['回復', `${t.healTest + t.healLevel + t.healShop}（テスト ${t.healTest} / Lv ${t.healLevel} / 薬 ${t.healShop}）`], ['+HP', compact(t.healed)]]),
     factLine(els, [['宝箱', String(t.chests)], ['装備', `${t.items}（弱体化 ${t.downgrades}）`]]),
-    factLine(els, [['獲得', `${compact(t.gold)} G`], ['Lv アップ', String(d.levels)]]),
+    factLine(els, [['獲得', `${compact(t.gold)} G`], ['買い物', `${t.buys}（-${compact(t.spent)} G）`], ['Lv アップ', String(d.levels)]]),
   ]
 }
 

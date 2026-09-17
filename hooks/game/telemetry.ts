@@ -36,7 +36,10 @@ export type Tally = {
   gold: number
   healTest: number
   healLevel: number
+  healShop: number
   healed: number
+  buys: number
+  spent: number
 }
 
 export type Telemetry = {
@@ -81,7 +84,7 @@ const LABEL_CHARS = 90
 
 export const newTally = (): Tally => ({
   attacks: 0, crits: 0, dealt: 0, hitsTaken: 0, dodges: 0, taken: 0, kills: 0, bossKills: 0,
-  chests: 0, items: 0, downgrades: 0, gold: 0, healTest: 0, healLevel: 0, healed: 0,
+  chests: 0, items: 0, downgrades: 0, gold: 0, healTest: 0, healLevel: 0, healShop: 0, healed: 0, buys: 0, spent: 0,
 })
 
 export const newTelemetry = (now: number): Telemetry => ({
@@ -287,6 +290,21 @@ export function tallyEvents(tally: Tally, events: readonly GameEvent[], state: {
       case 'heal':
         tally.healTest++
         tally.healed += e.amount
+        break
+      // a visit to the shop: what it bought, what it cost, and the remedy it drank there
+      case 'shop':
+        if (e.price > 0) {
+          tally.buys++
+          tally.spent += e.price
+        }
+        if (e.healed > 0) {
+          tally.healShop++
+          tally.healed += e.healed
+        }
+        if (e.item) {
+          tally.items++
+          if (e.item.replaced && !e.item.better) tally.downgrades++
+        }
         break
       default: break
     }
