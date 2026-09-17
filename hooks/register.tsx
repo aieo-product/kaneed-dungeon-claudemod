@@ -4,13 +4,15 @@ import { testEvent } from './game/detect.ts'
 import { isHero, type Hero } from './game/hero.ts'
 import type { RunSummary } from './game/sim.ts'
 import { countEvent, countTool, dash, isTally, newTelemetry, recordAgents, recordContext, recordHero, recordPrompt, recordTurn, type Tally } from './game/telemetry.ts'
+import { CHECK_EVERY_MS, isNewer, MANIFEST_URL, versionIn } from './game/update.ts'
 
 // The hooks module. It owns what outlives a session: Kaneed's sheet, the run number, the floor,
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
 // the dungeon itself on the drawing thread and posts its state back here to be saved.
 //
-// Kaneed explores while a model turn is running, and rests while Claude waits for you. Heals come
-// from two places only: a level up, and a test run of Claude's that passed (seen on tool.call).
+// Kaneed explores while a model turn is running, and rests while Claude waits for you. It heals for
+// free on a level up and on a test run of Claude's that passed (seen on tool.call); besides those,
+// only a shop it happens upon sells it a remedy (the board runs the visit, ./game/shop.ts).
 //
 // It also keeps this session's telemetry (./game/telemetry.ts) for the dashboard tab: every event
 // it catches, the tokens each turn spent, and Kaneed's progress at each save. Memory only.
@@ -38,6 +40,25 @@ let working = false
 // Kaneed over the saved one, and then save it
 let ready = false
 
+// The update notice. A third-party marketplace does not update itself unless the person turned
+// auto-update on, so once a day the plugin reads the manifest on the default branch and says, in a
+// toast, that a newer one is out. It is the one call that leaves the machine, and the `updateCheck`
+// option turns it off. Nothing is installed: updating stays the person's to do.
+async function checkUpdate($: EngineInterface) {
+  const now = await $.clock.now()
+  const last = Number(await $.store.get('updateCheckedAt').catch(() => 0)) || 0
+  if (now - last < CHECK_EVERY_MS) return
+  await $.store.set('updateCheckedAt', now).catch(() => {})
+  const manifest = await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).catch(() => '')
+  const mine = versionIn(manifest)
+  if (!mine) return
+  const answer = await $.http.fetch(MANIFEST_URL)
+  if (!answer.ok) return
+  const latest = versionIn(answer.text)
+  if (!isNewer(latest, mine)) return
+  $.ui.toast(`kaneed-dungeon ${latest} が出ています（いまは ${mine}）。/plugin から更新するか、settings.json のマーケットプレイスに "autoUpdate": true を書くと次からは自動で入ります`)
+}
+
 const isSave = (v: unknown): v is Save => typeof v === 'object' && v !== null && (v as Save).type === 'save' && isHero((v as Save).hero)
 
 // The cost, the context fill and the rate-limit windows, as the status line has them: the plain
@@ -54,7 +75,7 @@ async function refreshUsage($: EngineInterface, breakdown = false) {
   recordAgents(tele, agents)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
     const stored = (key: string) => $.store.get(key).catch(err => { $.ui.log(`kaneed-dungeon: store read failed: ${err}`); return undefined })
@@ -72,6 +93,8 @@ export const register: Register = on => {
     await refreshUsage($)
     ready = true
     $.ui.invalidate('ui.render')
+    // not awaited: the session starts while the check is in flight
+    if (options.updateCheck !== false) void checkUpdate($).catch(err => $.ui.log(`kaneed-dungeon: update check failed: ${err}`))
     await $.command.register({
       name: 'kaneed',
       description: 'カニード のダンジョン探索: ゲーム画面 / dash / status / log / hide / show (kaneed-dungeon)',
@@ -165,6 +188,7 @@ export const register: Register = on => {
     if (data.log.length) history = [...history, ...data.log].slice(-LOG_KEEP)
     if (data.dead) hall = [...hall, data.dead].slice(-HALL_KEEP)
     recordHero(tele, { hero, floor: floorNum, died: !!data.dead, levels: data.levels ?? 0, tally: isTally(data.tally) ? data.tally : undefined })
+    for (const line of data.log) if (line.startsWith('ショップで')) $.ui.toast(line)
     if (data.levels) $.ui.toast(`カニード が Lv ${hero.lv} になった！HP ${hero.hp} まで回復`)
     if (data.dead) $.ui.toast(`カニード は ${data.dead.killedBy} に倒された… 冒険 #${data.dead.run} は Lv ${data.dead.lv}、B${data.dead.floor}F で終わった`)
     if (!saving) {

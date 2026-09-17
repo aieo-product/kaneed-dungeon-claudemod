@@ -50,8 +50,8 @@ export function stats(h: Hero): Stats {
 export const xpNeeded = (lv: number) => 30 + 25 * lv + 3 * lv * lv
 export const HEAL_ON_LEVEL = 0.5
 
-// the only two ways Kaneed heals: a level up gives half the bar back, a passing test run a third.
-// Neither fills it, so the bar drifts down over a run and a test at the right moment matters.
+// the two ways Kaneed heals for free: a level up gives half the bar back, a passing test run a third.
+// Neither fills it, so the bar drifts down over a run; a shop, when one turns up, sells the rest.
 export function gainXp(h: Hero, xp: number): { hero: Hero; levels: number } {
   let hero = { ...h, xp: h.xp + xp }
   let levels = 0
