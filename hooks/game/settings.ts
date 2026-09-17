@@ -10,7 +10,8 @@ export const DEFAULTS: Settings = { rows: 'auto', scale: 'auto', minimap: true, 
 export const MIN_ROWS = 9
 export const MAX_ROWS = 22
 export const ROW_CHOICES: (number | 'auto')[] = ['auto', 12, 16, 20, 22]
-export const SCALE_CHOICES: (number | 'auto')[] = ['auto', 1, 2, 3]
+// the drawn art is as large as the stage ever draws it; the choices below only make it smaller
+export const SCALE_CHOICES: (number | 'auto')[] = ['auto', 1, 0.75, 0.5]
 // the figures the board can draw, in the order the settings screen cycles them
 export const SKIN_IDS = ['kaneed', 'ai', 'midori', 'murasaki', 'kin', 'fallback']
 
@@ -34,8 +35,9 @@ export const bandRows = (settings: Settings, maxRows: number) => {
   return settings.rows === 'auto' ? room : Math.max(MIN_ROWS, Math.min(settings.rows, room))
 }
 
-// the largest whole-number size the stage may draw at; 'auto' takes as much as the band allows
-export const wantScale = (settings: Settings) => (settings.scale === 'auto' ? 4 : settings.scale)
+// the size the stage draws at, never above 1: the sprites are drawn at the size they were made,
+// and a shorter band (or a smaller choice) takes them down from there
+export const wantScale = (settings: Settings) => (settings.scale === 'auto' ? 1 : settings.scale)
 
 // `/kaneed set <what> <value>`: the same settings from the keyboard, for a terminal without a
 // pointer. Unreadable input changes nothing and says what it takes.
@@ -50,8 +52,11 @@ export function applySetting(settings: Settings, words: string[]): { settings: S
       return { settings: { ...settings, rows: rows as number | 'auto' }, message: `帯の高さを ${rows === 'auto' ? '自動' : `${rows} 行`} にした` }
     }
     case 'size': case 'scale': case '大きさ': {
-      const scale = value === 'auto' || value === '自動' ? 'auto' : Number(value.replace(/^[x×]/i, ''))
-      if (!isChoice(scale, SCALE_CHOICES)) return no(`大きさは ${SCALE_CHOICES.join(' / ')} から選ぶ（例: /kaneed set size 2）`)
+      // 0.75 and 75% and 75 all name the same size
+      const raw = value.replace(/^[x×]/i, '').replace(/%$/, '')
+      const num = Number(raw)
+      const scale = value === 'auto' || value === '自動' ? 'auto' : num > 1 ? num / 100 : num
+      if (!isChoice(scale, SCALE_CHOICES)) return no(`大きさは 自動 / 1 / 0.75 / 0.5 から選ぶ（例: /kaneed set size 0.5）`)
       return { settings: { ...settings, scale: scale as number | 'auto' }, message: `キャラクターの大きさを ${scale === 'auto' ? '自動' : `×${scale}`} にした` }
     }
     case 'map': case 'minimap': case 'ミニマップ': {

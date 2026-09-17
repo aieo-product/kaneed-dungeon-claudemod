@@ -325,8 +325,8 @@ function drawHero(canvas: Canvas, hero: Hero, pose: HeroPose, alt: number, x: nu
   const body = scaled(figure, `${skin.id}:${key}`, grown)
   canvas.blit(body, x, y, tint)
   // Layers share the body's canvas, so they follow its factor: the anchor point is the same point,
-  // scaled. A body that had to be shrunk to fit wears nothing.
-  if (grown >= 1) {
+  // scaled. A shrunk body still wears its equipment, at the same factor.
+  {
     const frame = key.replace('hero_', '')
     // the fallback figure has its own anchor table; the hero frames share theirs
     const anchors = skin.figure === 'fallback' ? FALLBACK_ANCHORS : HERO_ANCHORS
@@ -342,15 +342,12 @@ function drawHero(canvas: Canvas, hero: Hero, pose: HeroPose, alt: number, x: nu
   return body
 }
 
-// The size everything on the stage is drawn at: the hero fills the height it has, and every other
-// figure is drawn at the same factor, so they keep their sizes relative to each other. A whole
-// number is preferred (a doubled pixel stays square); a band too short for the next whole step
-// still fills, at the fraction that fits.
+// The size everything on the stage is drawn at. The art is drawn at the size it was made and never
+// larger — bigger than that is in the way — so this only ever shrinks: to what was asked for, and
+// further if the band is too short even for that. Every figure takes the same factor, so they keep
+// their sizes relative to each other.
 export function stageScale(spriteH: number, maxH: number, want: number): number {
-  const fill = maxH / Math.max(1, spriteH)
-  if (fill < 1) return fill
-  const whole = Math.floor(Math.min(fill, want))
-  return want <= fill ? want : whole >= 2 ? whole : Math.min(fill, want)
+  return Math.min(want, 1, maxH / Math.max(1, spriteH))
 }
 
 // nearest-neighbour resize, any factor; 1 hands back the sprite as it is
@@ -874,7 +871,7 @@ function logView(s: Local, props: Props, header: RenderElement, rows: number, Bo
 // pointer.
 const next = <T,>(choices: readonly T[], now: T): T => choices[(choices.findIndex(c => c === now) + 1) % choices.length]
 const rowsLabel = (v: number | 'auto') => (v === 'auto' ? '自動' : `${v} 行`)
-const scaleLabel = (v: number | 'auto') => (v === 'auto' ? '自動（高さいっぱい）' : `×${v}`)
+const scaleLabel = (v: number | 'auto') => (v === 'auto' ? '自動' : v === 1 ? 'そのまま' : `×${v}`)
 
 // what the choices come to on this terminal: a band that cannot fit the size asked for draws at
 // the largest that does fit, and saying so beats leaving the player wondering
@@ -909,7 +906,7 @@ function settingsView(
       {header}
       <Text color="cyan" bold>{'▌設定'}</Text>
       {line('1', '帯の高さ', rowsLabel(settings.rows), ROW_CHOICES.map(rowsLabel).join(' / '), { ...settings, rows: next(ROW_CHOICES, settings.rows) })}
-      {line('2', 'キャラクターの大きさ', scaleLabel(settings.scale), SCALE_CHOICES.map(scaleLabel).join(' / '), { ...settings, scale: next(SCALE_CHOICES, settings.scale) })}
+      {line('2', 'キャラクターの大きさ', scaleLabel(settings.scale), `${SCALE_CHOICES.map(scaleLabel).join(' / ')}（そのままが最大）`, { ...settings, scale: next(SCALE_CHOICES, settings.scale) })}
       {line('3', 'ミニマップ', settings.minimap ? '表示' : '非表示', '表示 / 非表示', { ...settings, minimap: !settings.minimap })}
       {line('4', '主人公', skin.label, SKINS.map(sk => sk.short).join(' / '), { ...settings, skin: next(SKIN_IDS, settings.skin) })}
       {line('5', '初期値に戻す', '', '高さも大きさも主人公も最初の状態へ', { ...DEFAULTS })}
