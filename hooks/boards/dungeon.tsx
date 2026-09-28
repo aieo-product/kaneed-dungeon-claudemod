@@ -8,6 +8,7 @@ import { rebuildFloor, startRun, step, takeEvents, takeFresh, testFailed, testPa
 import { priceOf, wareName, type Ware } from '../game/shop.ts'
 import { EQUIP_ANCHORS, FALLBACK_ANCHORS, HERO_ANCHORS, HERO_OFFSETS, SPRITES, type Pixels } from './sprites.ts'
 import { layerOffset } from './anchors.ts'
+import { share, withinSize, type Cell } from './runs.ts'
 import { cellWidth, compact, duration, hbar, padCells, spark } from '../game/charts.ts'
 import { cacheHitRate, newTally, tallyEvents, tokenTotal, type Dash, type Tally } from '../game/telemetry.ts'
 import type { LinkRow } from '../links/extract.ts'
@@ -56,7 +57,6 @@ const FLOOR_TOP = '#af875f'
 const FLOOR = '#5f5f5f'
 const FLOOR_DOT = '#875f00'
 
-type Cell = [glyph: string, fg?: string, bg?: string, dim?: boolean, bold?: boolean]
 type Float = { x: number; y: number; text: string; color: string; ttl: number; bold?: boolean }
 type Burst = { x: number; y: number; ttl: number; big: boolean }
 type Foe = { key: string; name: string; boss: boolean; lv: number; hp: number; maxHp: number; x: number; home: number; state: 'enter' | 'idle' | 'dying' | 'leave'; t: number }
@@ -246,24 +246,9 @@ const gray = (c: string) => {
 }
 const snapAll = (px: Pixels): Pixels => px.map(row => row.map(c => (c ? snap256(c) : null)))
 
-// one styled span per run of cells sharing a style, folded pairwise until the row fits the budget
-function row(Text: ClientElements['Text'], cells: Cell[], maxRuns = 64) {
-  let runs: Cell[] = []
-  for (const c of cells) {
-    const last = runs[runs.length - 1]
-    if (last && last[1] === c[1] && last[2] === c[2] && last[3] === c[3] && last[4] === c[4]) last[0] += c[0]
-    else runs.push([c[0], c[1], c[2], c[3], c[4]])
-  }
-  while (runs.length > maxRuns) {
-    const folded: Cell[] = []
-    for (let i = 0; i < runs.length; i += 2) {
-      const a = runs[i]
-      const b = runs[i + 1]
-      folded.push(b ? [a[0] + b[0], a[1], a[2], a[3], a[4]] : a)
-    }
-    runs = folded
-  }
-  return <Text>{runs.map(([t, fg, bg, dim, bold]) => <Text color={fg && snap256(fg)} backgroundColor={bg && snap256(bg)} dimColor={dim} bold={bold}>{t}</Text>)}</Text>
+// one styled span per run of cells sharing a style, the spans shared out among the rows (./runs.ts)
+function row(Text: ClientElements['Text'], spans: Cell[]) {
+  return <Text>{spans.map(([t, fg, bg, dim, bold]) => <Text color={fg && snap256(fg)} backgroundColor={bg && snap256(bg)} dimColor={dim} bold={bold}>{t}</Text>)}</Text>
 }
 
 // the pixel canvas: W cells wide, 2*rows pixels tall
@@ -654,7 +639,7 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
   return (
     <Box flexDirection="column">
       {header}
-      {cells.map(line => row(Text, line))}
+      {withinSize(cells.length, budget => share(cells, budget).map(spans => row(Text, spans)))}
       <Text color={banner?.color ?? (sim.phase === 'dead' ? 'red' : undefined)} bold={banner?.bold} dimColor={!banner && sim.phase !== 'dead'} wrap="truncate-end">{status}</Text>
     </Box>
   )
@@ -1009,7 +994,7 @@ function statusView(s: Local, skinId: string | undefined, header: RenderElement,
   for (let i = 0; i < canvas.buf.length; i++) canvas.buf[i] = '#12100D'
   const bob = Math.floor(s.frame / 8) % 2
   drawHero(canvas, hero, s.dead ? 'dead' : 'idle', bob, 2, 2 + bob - (s.dead ? -1 : 0), 99, 1, skin, s.dead ? (c: string) => gray(c) : lowHp && s.frame % 10 < 5 ? (c: string) => mix(c, '#ff4040', 0.25) : undefined)
-  const portrait = canvas.cells().map(line => row(Text, line))
+  const portrait = share(canvas.cells()).map(spans => row(Text, spans))
   const lines = SLOTS.map(slot => {
     const item = hero.equipment[slot]
     return (
