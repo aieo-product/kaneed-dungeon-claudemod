@@ -23,6 +23,12 @@
       "description": "1 日 1 回、GitHub の plugin.json を見て新しいバージョンが出ていれば知らせる（オフにすると通信しない）",
       "default": true,
       "title": "更新の確認"
+    },
+    "linkTitles": {
+      "type": "boolean",
+      "description": "「会話リンク」タブで GitHub 以外のリンクのページタイトルを取得する（オフにするとホスト名を出し、GitHub 以外へは通信しない）",
+      "default": true,
+      "title": "リンクのページタイトル取得"
     }
   }
 }

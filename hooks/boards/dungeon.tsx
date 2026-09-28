@@ -10,6 +10,7 @@ import { EQUIP_ANCHORS, FALLBACK_ANCHORS, HERO_ANCHORS, HERO_OFFSETS, SPRITES, t
 import { layerOffset } from './anchors.ts'
 import { cellWidth, compact, duration, hbar, padCells, spark } from '../game/charts.ts'
 import { cacheHitRate, newTally, tallyEvents, tokenTotal, type Dash, type Tally } from '../game/telemetry.ts'
+import type { LinkRow } from '../links/extract.ts'
 import { bandRows, DEFAULTS, ROW_CHOICES, SCALE_CHOICES, SKIN_IDS, wantScale as scaleWanted, type Settings } from '../game/settings.ts'
 
 // The board: a surface module on the drawing thread. The dungeon is simulated in ticks of half a
@@ -24,7 +25,7 @@ import { bandRows, DEFAULTS, ROW_CHOICES, SCALE_CHOICES, SKIN_IDS, wantScale as 
 // Never name a local `h` in this file: every JSX tag compiles to a call of `h`.
 
 type Props = {
-  view?: 'game' | 'dash' | 'status' | 'log' | 'settings'
+  view?: 'game' | 'dash' | 'status' | 'log' | 'settings' | 'links'
   working?: boolean
   seed?: number
   saved?: Hero | null
@@ -37,6 +38,7 @@ type Props = {
   dash?: Dash
   settings?: Settings
   room?: number
+  links?: LinkRow[]
 } | undefined
 
 const FRAME_MS = 100
@@ -91,6 +93,8 @@ type Local = {
   dead: boolean
   // frames left of the victory pose after a kill
   victory: number
+  // the 会話リンク tab's scroll: the index of its first row
+  linkOffset: number
 }
 
 // hand-made props: a chest (closed, open) and a stair well, in the same pixel format as the sprites
@@ -454,7 +458,7 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
       sim, seed, heals: props?.heals ?? 0, fails: props?.fails ?? 0, frame: 0, working: props?.working === true,
       scroll: 0, walk: 0, hold: 0, heroDx: 0, heroFlash: 0, heroGlow: 0, foe: null, foeDx: 0, foeFlash: 0,
       floats: [], bursts: [], obj: null, banners: [{ text: sim.log[sim.log.length - 1] ?? '', color: HERO_COLOR, ttl: 30 }], anim: null,
-      tally: newTally(), bossFoe: { boss: false }, descend: 0, dead: false, victory: 0,
+      tally: newTally(), bossFoe: { boss: false }, descend: 0, dead: false, victory: 0, linkOffset: 0,
     })
     surface.every(FRAME_MS, () => {
       const s = surface.state
@@ -544,6 +548,7 @@ export default function Dungeon(props: Props, surface: ClientSurface<Local>) {
   if (props?.view === 'log') return logView(s, props, header, rows, Box, Text)
   if (props?.view === 'dash') return dashView(s, props.dash, header, cols, rows, Box, Text)
   if (props?.view === 'settings') return settingsView(props, header, change, Box, Text, Button)
+  if (props?.view === 'links') return linksView(s, props.links ?? [], header, cols, rows, surface)
 
   // ---- the stage ----
   const stageRows = rows - 2
@@ -1097,6 +1102,48 @@ function settingsView(
       {line('5', '初期値に戻す', '', '高さも大きさも主人公も最初の状態へ', { ...DEFAULTS })}
       <Text dimColor>{'ボタンを押すと次の選択肢へ。キーボードからは /kaneed set rows 16 のように指定する'}</Text>
       <Text dimColor>{drawnAt(settings, props?.room ?? 0)}</Text>
+    </Box>
+  )
+}
+
+// ---- the 会話リンク tab: what the conversation linked to, newest first ----
+// Each row is a button: pressing it posts the URL to the hooks module, which opens it in the
+// browser (the drawing thread cannot start a process). ▲ / ▼ page through the rest; the rows carry
+// no hotkey, since a digit would press from an empty composer.
+const LINK_ICON: Record<LinkRow['kind'], string> = { pr: '⇄', issue: '◦', link: '↗' }
+const LINK_COLOR: Record<LinkRow['kind'], string> = { pr: 'magenta', issue: 'green', link: 'cyan' }
+// the cells the engine's `[-]` collapse mark and the gap before it take at the band's right edge
+const MARK_WIDTH = 4
+
+function linksView(s: Local, links: LinkRow[], header: RenderElement, cols: number, rows: number, surface: ClientSurface<Local>) {
+  const { Box, Button, Text } = surface.elements
+  const page = Math.max(1, rows - 2)
+  s.linkOffset = Math.min(Math.max(0, s.linkOffset), Math.max(0, links.length - page))
+  const start = s.linkOffset
+  const shown = links.slice(start, start + page)
+  const scroll = (by: number) => () => {
+    s.linkOffset += by
+    surface.setState({ ...s })
+  }
+  const canUp = start > 0
+  const canDown = start + page < links.length
+  const width = Math.max(10, cols - MARK_WIDTH)
+  return (
+    <Box flexDirection="column">
+      {header}
+      <Box flexDirection="row" columnGap={1}>
+        <Text color="cyan" bold>{'▌会話リンク'}</Text>
+        <Button key="kaneed:links:up" hotkey="k" dimColor={!canUp} label="▲" onPress={scroll(-page)} />
+        <Button key="kaneed:links:down" hotkey="j" dimColor={!canDown} label="▼" onPress={scroll(page)} />
+        <Text dimColor wrap="truncate-end">{links.length ? `${start + 1}-${start + shown.length} / ${links.length} 件  行を押すとブラウザで開く` : ''}</Text>
+      </Box>
+      {links.length === 0 ? <Text dimColor wrap="truncate-end">{'リンクなし — 会話に URL や issue / PR が出るとここに並びます'}</Text> : null}
+      {shown.map((link, i) => (
+        <Box key={`kaneed:links:row:${start + i}`} flexDirection="row">
+          <Text color={LINK_COLOR[link.kind]}>{`${LINK_ICON[link.kind]} `}</Text>
+          <Button key={`kaneed:links:open:${start + i}`} plain label={padCells(`${link.text}  ${link.url}`, width - 2)} onPress={() => surface.post({ type: 'open', url: link.url })} />
+        </Box>
+      ))}
     </Box>
   )
 }
