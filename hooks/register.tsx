@@ -419,17 +419,18 @@ export const register: Register = (on, options) => {
       visible = false
       $.ui.invalidate('ui.render')
     }
-    const tab = (v: View, label: string) => <Button key={`kaneed:${v}`} label={view === v ? `[${label}]` : ` ${label} `} onPress={pick(v)} />
+    // the open tab at full strength, the rest dim: the button's own [ ] is the only bracket
+    const tab = (v: View, label: string) => <Button key={`kaneed:${v}`} label={label} dimColor={view !== v} onPress={pick(v)} />
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" columnGap={1}>
-          {tab('game', 'ゲーム画面')}
-          {tab('dash', 'ダッシュボード')}
-          {tab('status', 'ステータス')}
-          {tab('log', '履歴')}
-          {tab('links', '会話リンク')}
-          {tab('settings', '設定')}
-          <Button key="kaneed:close" label="閉じる" onPress={close} />
+          {tab('game', 'Game')}
+          {tab('dash', 'Dash')}
+          {tab('status', 'Status')}
+          {tab('log', 'Log')}
+          {tab('links', 'Links')}
+          {tab('settings', 'Settings')}
+          <Button key="kaneed:close" label="Close" dimColor onPress={close} />
           <Text dimColor wrap="truncate-end">{e.props.isWorking ? ' カニード は探索中' : ' Claude の応答待ち: カニード は休憩中'}</Text>
         </Box>
         <Client key="kaneed:board" module="./boards/dungeon.tsx" width={cols} height={rows} props={props()} />
