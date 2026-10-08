@@ -8,6 +8,7 @@ import { countEvent, countTool, dash, isTally, newTelemetry, recordAgents, recor
 import { CHECK_EVERY_MS, isNewer, MANIFEST_URL, versionIn } from './game/update.ts'
 import { extractFromMessage, extractLinks, mergeLinks, normalizeUrl, parseHashRefs, type Link, type LinkRow } from './links/extract.ts'
 import { githubSummary, hostSummary, htmlTitle, isFetchable } from './links/summary.ts'
+import { findPaths, linkify, pathOfFileUrl, resolvePath } from './links/linkify.ts'
 
 // The hooks module. It owns what outlives a session: Kaneed's sheet, the run number, the floor,
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
@@ -228,6 +229,51 @@ async function openLink($: EngineInterface, url: string) {
   }
 }
 
+// ---- links in the transcript: a click on a path, an issue word or a URL in a reply opens it ----
+// The reply is drawn again as Markdown with its paths and `#12` words made links; a path is made one
+// only when it exists. The new `Markdown` `onLinkPress` hands the click here instead of the terminal:
+// a directory opens in Finder, a file in its app, a URL in the browser.
+
+let cwd = ''
+let home: string | undefined
+// absolute path → whether it exists; asked once per path
+const exists = new Map<string, boolean>()
+const STAT_PER_DRAW = 40
+
+async function knownPaths($: EngineInterface, text: string): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  const ask: Promise<void>[] = []
+  for (const written of findPaths(text)) {
+    const abs = resolvePath(written, cwd, home)
+    if (!abs) continue
+    const known = exists.get(abs)
+    if (known === true) found.set(written, abs)
+    else if (known === undefined && ask.length < STAT_PER_DRAW) {
+      ask.push($.fs.stat(abs).then(() => true, () => false).then(ok => {
+        exists.set(abs, ok)
+        if (ok) found.set(written, abs)
+      }))
+    }
+  }
+  await Promise.all(ask)
+  return found
+}
+
+/** Opens a pressed link: a `file://` path with `open` (a directory in Finder), an http(s) URL in the browser. */
+async function openPressed($: EngineInterface, href: string) {
+  const path = pathOfFileUrl(href)
+  const target = path ?? (/^https?:\/\//.test(href) ? href : undefined)
+  if (!target) return
+  try {
+    let result = await $.process.run(['open', target], { timeoutMs: 10000 })
+    if (result.exitCode !== 0) result = await $.process.run(['xdg-open', target], { timeoutMs: 10000 })
+    if (result.exitCode === 0) $.ui.toast(`開きました: ${target}`)
+    else $.ui.toast(`開けませんでした: ${target} (${result.stderr.trim().split('\n')[0] || `exit ${result.exitCode}`})`)
+  } catch (err) {
+    $.ui.toast(`開けませんでした: ${target} (${err})`)
+  }
+}
+
 // summaries cost a `gh api` or a page fetch each: asked for only while the tab is open, not awaited
 function fillIfOpen($: EngineInterface) {
   if (view === 'links') void fillLinks($, linkTitles).catch(err => $.ui.log(`kaneed-dungeon: link summaries failed: ${err}`))
@@ -253,6 +299,8 @@ export const register: Register = (on, options) => {
     tele = newTelemetry(now)
     await refreshUsage($)
     await startLinks($)
+    cwd = await $.session.cwd().catch(() => '')
+    home = (await $.env.get('HOME').catch(() => undefined)) || undefined
     ready = true
     $.ui.invalidate('ui.render')
     // not awaited: the session starts while the check is in flight
@@ -400,6 +448,24 @@ export const register: Register = (on, options) => {
 
   const props = () => ({ view, working, seed, saved: hero, run, floorNum, heals, fails, settings, room, history: history.slice(-40), hall: hall.slice(-8), ...(view === 'dash' ? { dash: dash(tele) } : {}), ...(view === 'links' ? { links: linkRows() } : {}) })
   // (a Client's props are plain data: a key holding undefined is refused, so the dashboard's and the links are left out)
+
+  // a reply in the transcript, its paths and issue words made links a click opens
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    if (!ready || e.surface !== 'terminal' || e.props.isSummary) return next(e)
+    const paths = await knownPaths($, e.props.text)
+    const text = linkify(e.props.text, { paths, defaultRepo })
+    if (text === e.props.text && !/https?:\/\//.test(text)) return next(e)
+    const { Box, Markdown, Text } = await $.ui.resolve(e)
+    // a tree of our own loses the engine's bullet, so the reply's first block draws it here
+    return (
+      <Box flexDirection="row">
+        <Box width={2} flexShrink={0}><Text>{e.props.isFirstOfReply ? '⏺' : ' '}</Text></Box>
+        <Box flexGrow={1} flexShrink={1}>
+          <Markdown key="kaneed:reply" text={text} onLinkPress={link => void openPressed($, link.href)} />
+        </Box>
+      </Box>
+    )
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (!ready || !visible || e.props.hasSurvey || e.surface !== 'terminal') return next(e)
