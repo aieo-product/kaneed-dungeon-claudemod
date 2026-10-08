@@ -1,0 +1,26 @@
+$ bunx -p typescript tsc -p .
+Resolving dependencies
+Resolved, downloaded and extracted [2]
+Saved lockfile
+$ bunx --bun oxlint@1.83.0 hooks tests --deny-warnings
+Saved lockfile
+Validating marketplace manifest: /Volumes/AIWorkSSD/AIWorkSpace/github/aieo-product/kaneed-dungeon-claudemod/.claude-plugin/marketplace.json
+
+⚠ Found 2 warnings:
+
+  ❯ homepage: Unknown field 'homepage'. Claude Code ignores it at load time.
+  ❯ repository: Unknown field 'repository'. Claude Code ignores it at load time.
+
+Validating hooks: /Volumes/AIWorkSSD/AIWorkSpace/github/aieo-product/kaneed-dungeon-claudemod/hooks/hooks.json
+
+  ❯ ./register.tsx hooks: session.start, command.run{command=kaneed}, turn.start, turn.complete, prompt.submit, skill.prompt, session.compact, tool.call, ui.message, ui.render{component=AssistantMessage}, ui.render{component=AbovePrompt}
+  ❯ ./register.tsx answers its own command: command.run{command=kaneed}
+  ❯ ./register.tsx gating hook without .catch: prompt.submit
+  ❯ ./register.tsx gating hook without .catch: session.compact
+  ❯ ./register.tsx gating hook without .catch: tool.call
+  ❯ ./register.tsx calls: $.agent.list (via refreshUsage), $.clock.now, $.command.register, $.env.get, $.fs.read (via checkUpdate), $.fs.stat (via knownPaths, openPressed), $.http.fetch (via checkUpdate, summarizeLink), $.process.run (via readDefaultRepo, runOpener, summarizeLink), $.session.cwd, $.session.messages (via scanLinks), $.session.usage (via refreshUsage), $.store.get, $.store.set, $.ui.invalidate, $.ui.log, $.ui.resolve, $.ui.toast
+  ❯ ./register.tsx env writes: nothing
+  ❯ ./register.tsx env reads: HOME
+  ❯ ./register.tsx surface modules: hooks/boards/dungeon.tsx
+
+✔ Validation passed with warnings
