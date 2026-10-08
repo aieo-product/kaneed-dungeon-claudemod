@@ -1,0 +1,2 @@
+$ bunx --bun oxlint@1.83.0 hooks tests --deny-warnings
+Saved lockfile
