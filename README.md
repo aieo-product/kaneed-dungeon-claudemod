@@ -145,12 +145,13 @@ URL の抽出と概要の組み立ては [linktray-claudemod](https://github.com
 
 ### 会話ログの中のリンク
 
-Claude の応答に出てきた **ディレクトリ・ファイルのパス**（`/abs/path`、`~/path`、`hooks/register.tsx:12` のような相対パス）と、`#12` / `owner/repo#12`、URL をリンクとして描き直す。パスは実在するものだけがリンクになる（相対パスはセッションのディレクトリ基準）。
+Claude の応答に出てきた **ディレクトリのパス**（`/abs/path`、`~/path`、`docs/` のような相対パス）と、`#12` / `owner/repo#12`、URL をリンクとして描き直す。パスは実在するディレクトリだけがリンクになる（相対パスはセッションのディレクトリ基準）。
 
-- クリックすると開く。ディレクトリは Finder、URL と issue はブラウザ（`open` / `xdg-open`）。**ファイルと `.app` などのバンドルは実行しないよう Finder で場所を表示するだけ**（シンボリックリンクはリンク先で判定）。
+- クリックすると開く。ディレクトリは Finder、URL と issue はブラウザ（`open` / `xdg-open`）。
+- **ファイルと `.app` などのバンドルはリンクにしない**（シンボリックリンクはリンク先で判定）。cmd + クリックのリンクはターミナルが OS に直接渡すので、mod 側で「実行しない」を保証できないため。応答に `file://` リンクが直接書かれていた場合も、単クリックではディレクトリ以外を Finder で表示するだけにする。
 - パスの有無は、ファイルを変えうるツールが動いた後とターンの終わりに確かめ直す（`/cd` 後のディレクトリにも追従する）。
 - 単クリックで開くのはフルスクリーン表示のターミナル（クリックを受け取れる画面）。それ以外のターミナルでは cmd / ctrl + クリックでリンク（OSC 8）として開く。
-- コードブロック（``` / ~~~）・インラインコード中の URL・既存の Markdown リンクは書き換えない。Claude Code 2.1.293 以降の `Markdown` の `onLinkPress` を使う。
+- コードブロック（``` / ~~~、引用・リスト内も）・インラインコード中の URL・既存の Markdown リンク（参照形式も）は書き換えない。Claude Code 2.1.293 以降の `Markdown` の `onLinkPress` を使う。
 
 ### ダッシュボード（Dash タブ）
 
@@ -221,7 +222,7 @@ bunx -p typescript tsc -p .
 構成:
 
 - `hooks/register.tsx` — hooks モジュール。`/kaneed` の登録、`$.store` への保存、`turn.start` / `turn.complete` による作業中判定、`tool.call` でのテスト成否検出、`session.compact` でのマップ再生成、`ui.render` での帯描画、起動時の更新確認（1 日 1 回、`$.http.fetch` で GitHub の `plugin.json` を読むだけ）。
-- `hooks/links/` — Links タブの純粋ロジック。`extract.ts`（URL・`owner/repo#N` の抽出と重複排除）、`summary.ts`（`gh api` の結果とページ `<title>` からの概要）、`linkify.ts`（応答中のパス・`#N` を Markdown リンクに書き換える）。transcript の読み取り・概要の取得・ブラウザ起動は `hooks/register.tsx` 側。
+- `hooks/links/` — Links タブの純粋ロジック。`extract.ts`（URL・`owner/repo#N` の抽出と重複排除）、`summary.ts`（`gh api` の結果とページ `<title>` からの概要）、`linkify.ts`（応答中のディレクトリ・`#N` を Markdown リンクに書き換える）。transcript の読み取り・概要の取得・ブラウザ起動は `hooks/register.tsx` 側。
 - `hooks/boards/dungeon.tsx` — surface モジュール。0.1 秒ごとに 1 フレーム描き、5 フレームごとにシミュレーションを 1 ティック進める。ピクセルバッファ（1 文字 = 横 1px × 縦 2px、`▀` と前景・背景色）に背景・スプライトを合成し、その上に数字・エフェクト・ミニマップを重ねる。描く色はすべて xterm-256 パレットへ丸める。Claude Code の描画側は chalk 方式（各チャンネル `round(v/255*5)`）で 256 色へ落とすので、その丸めで狙いのパレット色に着地する値（各チャンネル 51 の倍数、グレーは 8+10n）で出力する。
 - `hooks/boards/sprites.ts` — スプライトデータ（生成物）。`tools/sprites/` に作り方がある。
 - `hooks/game/*.ts` — 純関数のゲームロジック。`rng`（シード付き乱数）、`map`（部屋と通路の生成・BFS）、`items`（装備）、`shop`（ショップの棚・値段・買う品の候補）、`hero`（成長・回復・装備）、`enemies`（敵の生成）、`sim`（1 ティックの進行）、`detect`（テストコマンドの判定）、`update`（バージョン比較）。

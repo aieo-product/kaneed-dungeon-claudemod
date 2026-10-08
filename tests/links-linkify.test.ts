@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { fileUrl, findPaths, linkify, looksLikePath, openCommands, pathOfFileUrl, resolvePath, splitLine } from '../hooks/links/linkify.ts'
+import { fileUrl, findPaths, isPlainDir, linkify, looksLikePath, openCommands, pathOfFileUrl, resolvePath, spellingsOf, splitLine } from '../hooks/links/linkify.ts'
 
 const cwd = '/work/repo'
 const home = '/Users/me'
@@ -117,5 +117,39 @@ describe('review #51: the reply is never corrupted', () => {
   test('the placeholder mark never leaks', () => {
     const text = '`a` https://e.com `#1` [x](https://e.com "t") `` `b` `` #2'
     expect(linkify(text, { paths: new Map(), defaultRepo: repo })).not.toContain('')
+  })
+})
+
+describe('review #51 round 2', () => {
+  const repo = { owner: 'o', repo: 'r' }
+  test('only a plain directory may be a link target', () => {
+    expect(isPlainDir('/work/repo/docs', 'dir')).toBe(true)
+    expect(isPlainDir('/Applications/Evil.app', 'dir')).toBe(false)
+    expect(isPlainDir('/tmp/evil.command', 'file')).toBe(false)
+    expect(isPlainDir('/x', 'other')).toBe(false)
+  })
+  test('fences inside a quote or a list item are left whole', () => {
+    for (const text of ['> ```sh\n> ls /tmp/dir #12\n> ```', '- step\n    ```\n    cd /tmp/dir #12\n    ```', '1. ```\n   #12\n   ```']) {
+      expect(linkify(text, { paths: new Map([['/tmp/dir', '/tmp/dir']]), defaultRepo: repo })).toBe(text)
+    }
+  })
+  test('reference links and their definitions are left whole', () => {
+    const text = 'see [#12][issue] and [/tmp/dir][]\n\n[issue]: https://example.com/#3 "t"\n[/tmp/dir]: /tmp/dir'
+    expect(linkify(text, { paths: new Map([['/tmp/dir', '/tmp/dir']]), defaultRepo: repo })).toBe(text)
+  })
+  test('a path with non-ASCII names is one path, never its prefix', () => {
+    expect(findPaths('see /tmp/日本語/report.md here')).toEqual(['/tmp/日本語/report.md'])
+    const paths = new Map([['/tmp/', '/tmp']])
+    expect(linkify('see /tmp/日本語/report.md here', { paths })).toBe('see /tmp/日本語/report.md here')
+  })
+  test('prose run on after a path still finds the path', () => {
+    expect(spellingsOf('/tmp/xと書いた')).toEqual(['/tmp/xと書いた', '/tmp/x'])
+    expect(spellingsOf('/tmp/日本語/a.md')).toEqual(['/tmp/日本語/a.md'])
+    expect(findPaths('パスは/tmp/xと書いた')).toEqual(['/tmp/xと書いた', '/tmp/x'])
+    expect(linkify('パスは/tmp/xと書いた', { paths: new Map([['/tmp/x', '/tmp/x']]) })).toBe('パスは[/tmp/x](file:///tmp/x)と書いた')
+  })
+  test('owner/repo#N is an issue even where owner/repo is a directory', () => {
+    const paths = new Map([['nodejs/node', '/work/nodejs/node']])
+    expect(linkify('see nodejs/node#12', { paths })).toBe('see [nodejs/node#12](https://github.com/nodejs/node/issues/12)')
   })
 })

@@ -8,8 +8,19 @@ import { trimUrl } from './extract.ts'
 export type PathHit = { written: string; abs: string }
 
 // `/abs/path`, `~/path`, `./rel`, `../rel` or `dir/file.ext`, with an optional `:line[:col]` tail.
-// A bare word without a slash is never a path; a relative one needs a `./` or an extension at its end.
-const PATH_RE = /(?<![\w:/.~-])(?:~\/|\.{1,2}\/|\/)?(?:[\w.@+-]+\/)*[\w.@+-]+\/?(?::\d+(?::\d+)?)?/g
+// A bare word without a slash is never a path. Names may be any script (`/tmp/日本語/a.md` is one
+// path), but a relative path starts with an ASCII name, so `パスは/tmp/x` yields `/tmp/x`.
+const PATH_RE = /(?<![\w:/.~-])(?:~\/|\.{1,2}\/|\/|(?=[\w.@+-]))(?:[\p{L}\p{N}\p{M}_.@+-]+\/)*[\p{L}\p{N}\p{M}_.@+-]+\/?(?::\d+(?::\d+)?)?/gu
+
+/**
+ * The spellings a matched word may mean: itself, and, when prose runs on after it with no space
+ * (`/tmp/xと書いた`), the word up to where its last name stops being ASCII. Only the last name is
+ * cut, so `/tmp/日本語/a.md` never falls back to `/tmp/`.
+ */
+export function spellingsOf(word: string): string[] {
+  const m = /^(.*\/[\w.@+-]+)[^\p{ASCII}][^/]*$/u.exec(word)
+  return m && looksLikePath(m[1]!) ? [word, m[1]!] : [word]
+}
 
 const LINE_TAIL = /:\d+(?::\d+)?$/
 
@@ -24,9 +35,9 @@ export function looksLikePath(word: string): boolean {
   const path = word.replace(LINE_TAIL, '')
   if (path.length < 2 || path.length > 1024) return false
   if (/^(?:~\/|\.{1,2}\/)/.test(path)) return true
-  if (path.startsWith('/')) return path.length > 1 && /[\w]/.test(path) && !path.startsWith('//')
+  if (path.startsWith('/')) return path.length > 1 && /[\p{L}\p{N}]/u.test(path) && !path.startsWith('//')
   // relative: needs a slash between two names (`hooks/register.tsx`, `docs/`) and no scheme-like start
-  return /^[\w.@+-]+\/[\w.@+/-]*$/.test(path) && !/^\d+\/\d+/.test(path)
+  return /^[\w.@+-][\p{L}\p{N}\p{M}_.@+-]*\/[\p{L}\p{N}\p{M}_.@+/-]*$/u.test(path) && !/^\d+\/\d+/.test(path)
 }
 
 /** Where a written path leads: `~` against `home`, a relative one against `cwd`, `.` and `..` folded. */
@@ -57,6 +68,11 @@ export function fileUrl(abs: string): string {
 // a directory macOS runs when it is opened, not shows
 const BUNDLE = /\.(?:app|appex|bundle|framework|plugin|kext|prefpane|qlgenerator|saver|workflow|xpc|mdimporter|action)\/?$/i
 
+/** Whether a path, where it lands, is a directory a click may open: a plain one, not an app or other bundle. */
+export function isPlainDir(realPath: string, kind: 'file' | 'dir' | 'other'): boolean {
+  return kind === 'dir' && !BUNDLE.test(realPath)
+}
+
 /** What opening a pressed path runs (macOS `open`, then `xdg-open`): a plain directory is shown, anything else only revealed. */
 export function openCommands(path: string, kind: 'file' | 'dir' | 'other'): { argv: string[]; fallback: string[]; revealed: boolean } {
   // a click never runs what it lands on: a file (a script, a `.command`) or an app bundle is revealed, not opened
@@ -85,10 +101,11 @@ export function findPaths(text: string): string[] {
     // a Markdown link's target is already a link; leave it out of the search
     const plain = chunk.text.replace(/\]\([^)\s]*\)/g, '] ').replace(/https?:\/\/[^\s<>"'`　]+/g, ' ')
     for (const m of plain.matchAll(PATH_RE)) {
-      const word = trimUrl(m[0])
-      if (!looksLikePath(word) || seen.has(word)) continue
-      seen.add(word)
-      out.push(word)
+      for (const word of spellingsOf(trimUrl(m[0]))) {
+        if (!looksLikePath(word) || seen.has(word)) continue
+        seen.add(word)
+        out.push(word)
+      }
     }
   }
   return out
@@ -109,7 +126,8 @@ export function splitFences(text: string): Chunk[] {
     buf = []
   }
   for (const line of text.split('\n')) {
-    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    // inside a quote (`> `) or a list item (`- `, `1. `, indented) too
+    const m = /^[ \t]*(?:>[ \t]?)*(?:(?:[-*+]|\d+[.)])[ \t]+)?[ \t]*(`{3,}|~{3,})(.*)$/.exec(line)
     if (!open && m && !(m[1]![0] === '`' && m[2]!.includes('`'))) {
       flush(false)
       open = { char: m[1]![0]!, len: m[1]!.length }
@@ -135,9 +153,12 @@ export type LinkifyOptions = {
 const PROTECT_RE = new RegExp([
   /(`+)(?!`)([^\n]*?[^`\n])\1(?!`)/.source,
   /\[[^\]\n]*\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/.source,
+  // a reference link (`[text][ref]`, `[text][]`) and a reference definition line (`[ref]: url`)
+  /\[[^\]\n]*\]\[[^\]\n]*\]/.source,
+  /^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S[^\n]*$/.source,
   /<https?:[^>\s]+>/.source,
   /https?:\/\/[^\s<>"'`　]+/.source,
-].join('|'), 'g')
+].join('|'), 'gm')
 
 const escapeLabel = (s: string) => s.replace(/([[\]\\*_`~])/g, '\\$1')
 
@@ -163,19 +184,21 @@ function linkifyPlain(text: string, paths: ReadonlyMap<string, string>, defaultR
     const abs = paths.get(inner.trim())
     return hold(abs ? `[${escapeLabel(inner.trim())}](${fileUrl(abs)})` : m)
   })
-  if (paths.size) {
-    out = out.replace(PATH_RE, m => {
-      const word = trimUrl(m)
-      const abs = paths.get(word)
-      if (!abs) return m
-      return hold(`[${escapeLabel(word)}](${fileUrl(abs)})`) + m.slice(word.length)
-    })
-  }
+  // issue words first: `owner/repo#12` is an issue even where `owner/repo` is also a directory
   out = out.replace(/(^|[\s(（])([\w.-]+)\/([\w.-]+)#(\d+)(?=$|[^\w])/gm, (_m, pre: string, owner: string, repo: string, n: string) =>
     `${pre}${hold(`[${owner}/${repo}#${n}](https://github.com/${owner}/${repo}/issues/${n})`)}`)
   if (defaultRepo) {
     out = out.replace(/(^|[\s(（「[])#(\d{1,5})(?=$|[^\w#])/gm, (_m, pre: string, n: string) =>
       `${pre}${hold(`[#${n}](https://github.com/${defaultRepo.owner}/${defaultRepo.repo}/issues/${n})`)}`)
+  }
+  if (paths.size) {
+    out = out.replace(PATH_RE, m => {
+      for (const word of spellingsOf(trimUrl(m))) {
+        const abs = paths.get(word)
+        if (abs) return hold(`[${escapeLabel(word)}](${fileUrl(abs)})`) + m.slice(word.length)
+      }
+      return m
+    })
   }
   return out.replace(/\uE000(\d+)\uE000/g, (_m, i: string) => held[Number(i)]!)
 }

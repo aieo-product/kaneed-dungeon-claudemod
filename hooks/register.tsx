@@ -8,7 +8,7 @@ import { countEvent, countTool, dash, isTally, newTelemetry, recordAgents, recor
 import { CHECK_EVERY_MS, isNewer, MANIFEST_URL, versionIn } from './game/update.ts'
 import { extractFromMessage, extractLinks, mergeLinks, normalizeUrl, parseHashRefs, type Link, type LinkRow } from './links/extract.ts'
 import { githubSummary, hostSummary, htmlTitle, isFetchable } from './links/summary.ts'
-import { findPaths, linkify, openCommands, pathOfFileUrl, resolvePath } from './links/linkify.ts'
+import { findPaths, isPlainDir, linkify, openCommands, pathOfFileUrl, resolvePath } from './links/linkify.ts'
 
 // The hooks module. It owns what outlives a session: Kaneed's sheet, the run number, the floor,
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
@@ -234,19 +234,22 @@ async function openLink($: EngineInterface, url: string) {
   await runOpener($, ['open', url], ['xdg-open', url], url)
 }
 
-// ---- links in the transcript: a click on a path, an issue word or a URL in a reply opens it ----
-// The reply is drawn again as Markdown with its paths and `#12` words made links; a path is made one
-// only when it exists. The new `Markdown` `onLinkPress` hands the click here instead of the terminal:
-// a directory opens in Finder, a file in its app, a URL in the browser.
+// ---- links in the transcript: a click on a directory, an issue word or a URL in a reply opens it ----
+// The reply is drawn again as Markdown with its directories and `#12` words made links. Only a plain
+// directory (judged where it lands, never an app bundle) is made one: a terminal opens a `file://`
+// link with the OS handler on a cmd-click, past any check here, so a file must never be a link. The
+// `Markdown` `onLinkPress` hands a plain click here: a directory opens in Finder, a URL in the browser,
+// and a `file://` link the reply wrote itself is only revealed unless it is a plain directory.
 
 let cwd = ''
 let home: string | undefined
-// absolute path → whether it exists; dropped whenever a tool may have changed the files
-const exists = new Map<string, boolean>()
+// absolute path → the directory it lands on, or false (missing, a file, an app); dropped whenever a
+// tool may have changed the files
+const dirs = new Map<string, string | false>()
 
 /** After a tool ran or a turn ended: files may have come or gone, and `/cd` may have moved the session. */
 async function refreshPaths($: EngineInterface) {
-  exists.clear()
+  dirs.clear()
   cwd = await $.session.cwd().catch(() => cwd)
 }
 const STAT_PER_DRAW = 40
@@ -257,12 +260,15 @@ async function knownPaths($: EngineInterface, text: string): Promise<Map<string,
   for (const written of findPaths(text)) {
     const abs = resolvePath(written, cwd, home)
     if (!abs) continue
-    const known = exists.get(abs)
-    if (known === true) found.set(written, abs)
+    const known = dirs.get(abs)
+    if (known) found.set(written, known)
     else if (known === undefined && ask.length < STAT_PER_DRAW) {
-      ask.push($.fs.stat(abs).then(() => true, () => false).then(ok => {
-        exists.set(abs, ok)
-        if (ok) found.set(written, abs)
+      ask.push($.fs.stat(abs, { resolve: true }).then(
+        stat => (stat.realPath && isPlainDir(stat.realPath, stat.kind) ? stat.realPath : false),
+        () => false as const,
+      ).then(target => {
+        dirs.set(abs, target)
+        if (target) found.set(written, target)
       }))
     }
   }
