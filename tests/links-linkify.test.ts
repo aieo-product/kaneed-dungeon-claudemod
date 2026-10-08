@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { fileUrl, findPaths, isPlainDir, linkify, looksLikePath, openCommands, pathOfFileUrl, resolvePath, spellingsOf, splitLine } from '../hooks/links/linkify.ts'
+import { fileUrl, findPaths, isPlainDir, linkify, looksLikePath, openCommands, pathOfFileUrl, resolvePath, spellingsOf, splitLine, trimPath } from '../hooks/links/linkify.ts'
 
 const cwd = '/work/repo'
 const home = '/Users/me'
@@ -151,5 +151,31 @@ describe('review #51 round 2', () => {
   test('owner/repo#N is an issue even where owner/repo is a directory', () => {
     const paths = new Map([['nodejs/node', '/work/nodejs/node']])
     expect(linkify('see nodejs/node#12', { paths })).toBe('see [nodejs/node#12](https://github.com/nodejs/node/issues/12)')
+  })
+})
+
+describe('review #51 round 3', () => {
+  const repo = { owner: 'o', repo: 'r' }
+  const dir = new Map([['/tmp/dir', '/tmp/dir']])
+  test('an indented code block and a fence nested in a list and a quote are left whole', () => {
+    for (const text of ['text\n\n    cd /tmp/dir #12\n', '- item\n  > ```\n  > ls /tmp/dir #12\n  > ```', '> \tls /tmp/dir #12']) {
+      expect(linkify(text, { paths: dir, defaultRepo: repo })).toBe(text)
+    }
+  })
+  test('inline code over a line break is left whole', () => {
+    const text = 'run `cd /tmp/dir\n#12` then'
+    expect(linkify(text, { paths: dir, defaultRepo: repo })).toBe(text)
+  })
+  test('a shortcut reference with a definition is left whole, one without is linked', () => {
+    const text = 'see [#12] and #3\n\n[#12]: https://example.com/original'
+    expect(linkify(text, { paths: new Map(), defaultRepo: repo })).toBe('see [#12] and [#3](https://github.com/o/r/issues/3)\n\n[#12]: https://example.com/original')
+  })
+  test('a trailing . or .. segment stays part of the path', () => {
+    expect(trimPath('hooks/..')).toBe('hooks/..')
+    expect(trimPath('hooks/.')).toBe('hooks/.')
+    expect(trimPath('hooks/...')).toBe('hooks/')
+    expect(trimPath('/tmp/dir.')).toBe('/tmp/dir')
+    expect(findPaths('go up with hooks/.. now')).toEqual(['hooks/..'])
+    expect(linkify('go up with hooks/.. now', { paths: new Map([['hooks/..', '/w']]) })).toBe('go up with [hooks/..](file:///w) now')
   })
 })

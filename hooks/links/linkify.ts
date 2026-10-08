@@ -24,6 +24,14 @@ export function spellingsOf(word: string): string[] {
 
 const LINE_TAIL = /:\d+(?::\d+)?$/
 
+/** A matched word without the punctuation a sentence leaves on it, keeping a trailing `.` / `..` segment. */
+export function trimPath(raw: string): string {
+  const word = trimUrl(raw)
+  if (!word.endsWith('/')) return word
+  const dots = /^\.{1,2}(?!\.)/.exec(raw.slice(word.length))
+  return dots ? word + dots[0] : word
+}
+
 /** Splits `path:12:3` into the path and its line, if any. */
 export function splitLine(written: string): { path: string; line?: number } {
   const m = /^(.*?):(\d+)(?::\d+)?$/.exec(written)
@@ -101,7 +109,7 @@ export function findPaths(text: string): string[] {
     // a Markdown link's target is already a link; leave it out of the search
     const plain = chunk.text.replace(/\]\([^)\s]*\)/g, '] ').replace(/https?:\/\/[^\s<>"'`　]+/g, ' ')
     for (const m of plain.matchAll(PATH_RE)) {
-      for (const word of spellingsOf(trimUrl(m[0]))) {
+      for (const word of spellingsOf(trimPath(m[0]))) {
         if (!looksLikePath(word) || seen.has(word)) continue
         seen.add(word)
         out.push(word)
@@ -127,7 +135,7 @@ export function splitFences(text: string): Chunk[] {
   }
   for (const line of text.split('\n')) {
     // inside a quote (`> `) or a list item (`- `, `1. `, indented) too
-    const m = /^[ \t]*(?:>[ \t]?)*(?:(?:[-*+]|\d+[.)])[ \t]+)?[ \t]*(`{3,}|~{3,})(.*)$/.exec(line)
+    const m = /^(?:[ \t]*(?:>|[-*+](?=[ \t])|\d+[.)](?=[ \t])))*[ \t]*(`{3,}|~{3,})(.*)$/.exec(line)
     if (!open && m && !(m[1]![0] === '`' && m[2]!.includes('`'))) {
       flush(false)
       open = { char: m[1]![0]!, len: m[1]!.length }
@@ -150,15 +158,28 @@ export type LinkifyOptions = {
   defaultRepo?: { owner: string; repo: string }
 }
 
-const PROTECT_RE = new RegExp([
-  /(`+)(?!`)([^\n]*?[^`\n])\1(?!`)/.source,
+const PROTECT = [
+  // inline code, which may run over a line break but not a blank line
+  /(`+)(?!`)((?:(?!\n[ \t]*\n)[\s\S])*?[^`\n])\1(?!`)/.source,
+  // a line indented as code (four spaces or a tab, inside quotes too): left whole, a list item's
+  // deeper lines with it, rather than risk rewriting an indented code block
+  /^(?:[ \t]*>[ \t]?)*(?: {4}|\t)[^\n]*$/.source,
   /\[[^\]\n]*\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/.source,
   // a reference link (`[text][ref]`, `[text][]`) and a reference definition line (`[ref]: url`)
   /\[[^\]\n]*\]\[[^\]\n]*\]/.source,
   /^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S[^\n]*$/.source,
   /<https?:[^>\s]+>/.source,
   /https?:\/\/[^\s<>"'`　]+/.source,
-].join('|'), 'gm')
+]
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** The protecting pattern, with a shortcut reference (`[label]`) for each label the text defines. */
+function protectRe(text: string): RegExp {
+  const labels = [...text.matchAll(/^[ \t]{0,3}\[([^\]\n]+)\]:/gm)].map(m => escapeRe(m[1]!))
+  const shortcut = labels.length ? [`\\[(?:${labels.join('|')})\\](?![(\\[])`] : []
+  return new RegExp([...PROTECT, ...shortcut].join('|'), 'gmi')
+}
 
 const escapeLabel = (s: string) => s.replace(/([[\]\\*_`~])/g, '\\$1')
 
@@ -170,16 +191,17 @@ const escapeLabel = (s: string) => s.replace(/([[\]\\*_`~])/g, '\\$1')
 export function linkify(text: string, options: LinkifyOptions): string {
   const { paths, defaultRepo } = options
   return splitFences(text)
-    .map(chunk => (chunk.fenced ? chunk.text : linkifyPlain(chunk.text, paths, defaultRepo)))
+    // a reference definition anywhere in the reply protects its shortcut uses everywhere
+    .map(chunk => (chunk.fenced ? chunk.text : linkifyPlain(chunk.text, text, paths, defaultRepo)))
     .join('')
 }
 
-function linkifyPlain(text: string, paths: ReadonlyMap<string, string>, defaultRepo?: { owner: string; repo: string }): string {
+function linkifyPlain(text: string, defs: string, paths: ReadonlyMap<string, string>, defaultRepo?: { owner: string; repo: string }): string {
   // protect, in one pass so nothing is held twice: inline code (made a link when it is just a known
   // path), a Markdown link with or without a title, an autolink, a bare URL
   const held: string[] = []
   const hold = (s: string) => `\uE000${held.push(s) - 1}\uE000`
-  let out = text.replace(PROTECT_RE, (m, _ticks: string | undefined, inner: string | undefined) => {
+  let out = text.replace(protectRe(defs), (m, _ticks: string | undefined, inner: string | undefined) => {
     if (inner === undefined) return hold(m)
     const abs = paths.get(inner.trim())
     return hold(abs ? `[${escapeLabel(inner.trim())}](${fileUrl(abs)})` : m)
@@ -193,7 +215,7 @@ function linkifyPlain(text: string, paths: ReadonlyMap<string, string>, defaultR
   }
   if (paths.size) {
     out = out.replace(PATH_RE, m => {
-      for (const word of spellingsOf(trimUrl(m))) {
+      for (const word of spellingsOf(trimPath(m))) {
         const abs = paths.get(word)
         if (abs) return hold(`[${escapeLabel(word)}](${fileUrl(abs)})`) + m.slice(word.length)
       }

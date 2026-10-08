@@ -251,6 +251,8 @@ const dirs = new Map<string, string | false>()
 async function refreshPaths($: EngineInterface) {
   dirs.clear()
   cwd = await $.session.cwd().catch(() => cwd)
+  // the replies already drawn ask again
+  $.ui.invalidate('ui.render')
 }
 const STAT_PER_DRAW = 40
 
@@ -486,7 +488,8 @@ export const register: Register = (on, options) => {
     if (!ready || e.surface !== 'terminal' || e.props.isSummary) return next(e)
     const paths = await knownPaths($, e.props.text)
     const text = linkify(e.props.text, { paths, defaultRepo })
-    if (text === e.props.text && !/https?:\/\//.test(text)) return next(e)
+    // nothing of ours to answer: the engine draws it (a `file://` link the reply wrote still needs our press)
+    if (text === e.props.text && !/(?:https?|file):\/\//.test(text)) return next(e)
     const { Box, Markdown, Text } = await $.ui.resolve(e)
     // a tree of our own loses the engine's bullet, so the reply's first block draws it here
     return (
