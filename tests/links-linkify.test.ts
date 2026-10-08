@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { fileUrl, findPaths, isPlainDir, linkify, looksLikePath, openCommands, pathOfFileUrl, resolvePath, spellingsOf, splitLine, trimPath } from '../hooks/links/linkify.ts'
+import { fileKind, fileUrl, findPaths, lineOfFileUrl, linkify, linkTarget, looksLikePath, openCommands, pathOfFileUrl, resolvePath, spellingsOf, splitLine, trimPath } from '../hooks/links/linkify.ts'
+import type { LinkDest } from '../hooks/links/linkify.ts'
 
 const cwd = '/work/repo'
 const home = '/Users/me'
@@ -71,14 +72,57 @@ describe('linkify', () => {
 
 describe('openCommands', () => {
   test('a plain directory is opened', () => {
-    expect(openCommands('/work/repo/docs', 'dir')).toEqual({ argv: ['open', '/work/repo/docs'], fallback: ['xdg-open', '/work/repo/docs'], revealed: false })
+    expect(openCommands('/work/repo/docs', 'dir')).toEqual({ cmds: [['open', '/work/repo/docs'], ['xdg-open', '/work/repo/docs']], revealed: false })
   })
-  test('a file, an app bundle or an unknown is only revealed, never run', () => {
-    expect(openCommands('/tmp/evil.command', 'file')).toEqual({ argv: ['open', '-R', '/tmp/evil.command'], fallback: ['xdg-open', '/tmp'], revealed: true })
-    expect(openCommands('/Applications/Evil.app', 'dir').argv).toEqual(['open', '-R', '/Applications/Evil.app'])
+  test('a script, an unlisted file, an app bundle or an unknown is only revealed, never run', () => {
+    expect(openCommands('/tmp/evil.command', 'file')).toEqual({ cmds: [['open', '-R', '/tmp/evil.command'], ['xdg-open', '/tmp']], revealed: true })
+    expect(openCommands('/tmp/run.py', 'file', { line: 3 }).revealed).toBe(true)
+    expect(openCommands('/Applications/Evil.app', 'dir').cmds[0]).toEqual(['open', '-R', '/Applications/Evil.app'])
     expect(openCommands('/x/Thing.WORKFLOW/', 'dir').revealed).toBe(true)
     expect(openCommands('/x/y', 'other').revealed).toBe(true)
-    expect(openCommands('/top', 'file').fallback).toEqual(['xdg-open', '/'])
+    expect(openCommands('/top', 'file').cmds[1]).toEqual(['xdg-open', '/'])
+  })
+  test('text opens in an editor at its line', () => {
+    const { cmds, revealed } = openCommands('/w/a b.ts', 'file', { line: 12 })
+    expect(revealed).toBe(false)
+    expect(cmds).toEqual([
+      ['code', '-g', '/w/a b.ts:12'],
+      ['cursor', '-g', '/w/a b.ts:12'],
+      ['open', 'vscode://file/w/a%20b.ts:12'],
+      ['open', 'cursor://file/w/a%20b.ts:12'],
+      ['open', '-t', '/w/a b.ts'],
+      ['xdg-open', '/w/a b.ts'],
+    ])
+    expect(openCommands('/w/x#1.md', 'file').cmds[2]).toEqual(['open', 'vscode://file/w/x%231.md'])
+  })
+  test('an image, a PDF or a page opens in its viewer', () => {
+    expect(openCommands('/w/r.html', 'file').cmds[0]).toEqual(['open', '/w/r.html'])
+    expect(openCommands('/w/shot.PNG', 'file')).toEqual({ cmds: [['open', '/w/shot.PNG'], ['xdg-open', '/w/shot.PNG']], revealed: false })
+  })
+  test('openFiles off: every file is only revealed', () => {
+    expect(openCommands('/w/a.md', 'file', { openFiles: false }).revealed).toBe(true)
+    expect(openCommands('/w/docs', 'dir', { openFiles: false }).revealed).toBe(false)
+  })
+})
+
+describe('file links', () => {
+  test('fileKind by extension', () => {
+    expect(fileKind('/a/README.md')).toBe('text')
+    expect(fileKind('/a/x.TSX')).toBe('text')
+    expect(fileKind('/a/doc.pdf')).toBe('view')
+    expect(fileKind('/a/report.HTML')).toBe('view')
+    for (const p of ['/a/run.py', '/a/x.sh', '/a/x.command', '/a/i.svg', '/a/Makefile', '/a/.env', '/a.d/noext']) expect(fileKind(p)).toBeUndefined()
+  })
+  test('a listed file links to itself, at its line', () => {
+    expect(linkTarget('/w/package.json', 'file')).toBe('/w/package.json')
+    const out = linkify('see hooks/a.ts:12 and /w/b.md', { paths: new Map<string, LinkDest>([['hooks/a.ts:12', { path: '/w/hooks/a.ts', line: 12 }], ['/w/b.md', '/w/b.md']]) })
+    expect(out).toBe('see [hooks/a.ts:12](file:///w/hooks/a.ts#L12) and [/w/b.md](file:///w/b.md)')
+  })
+  test('lineOfFileUrl', () => {
+    expect(lineOfFileUrl('file:///w/a.ts#L12')).toBe(12)
+    expect(lineOfFileUrl('file:///w/a.ts#L12C3')).toBe(12)
+    expect(lineOfFileUrl('file:///w/a.ts#L12-L20')).toBe(12)
+    expect(lineOfFileUrl('file:///w/a.ts')).toBeUndefined()
   })
 })
 
@@ -124,10 +168,22 @@ describe('review #51: the reply is never corrupted', () => {
 describe('review #51 round 2', () => {
   const repo = { owner: 'o', repo: 'r' }
   test('only a plain directory may be a link target', () => {
-    expect(isPlainDir('/work/repo/docs', 'dir')).toBe(true)
-    expect(isPlainDir('/Applications/Evil.app', 'dir')).toBe(false)
-    expect(isPlainDir('/tmp/evil.command', 'file')).toBe(false)
-    expect(isPlainDir('/x', 'other')).toBe(false)
+    expect(linkTarget('/work/repo/docs', 'dir')).toBe('/work/repo/docs')
+    expect(linkTarget('/Applications/Evil.app', 'dir')).toBeUndefined()
+    expect(linkTarget('/x', 'other')).toBeUndefined()
+  })
+  test('an unlisted file (or any, with openFiles off) links to the directory holding it', () => {
+    expect(linkTarget('/tmp/evil.command', 'file')).toBe('/tmp')
+    expect(linkTarget('/tmp/run.py', 'file')).toBe('/tmp')
+    expect(linkTarget('/work/repo/package.json', 'file', false)).toBe('/work/repo')
+    expect(linkTarget('/top', 'file')).toBe('/')
+    // a file right in a bundle: opening the bundle would launch it
+    expect(linkTarget('/Applications/Evil.app/run', 'file')).toBeUndefined()
+    expect(linkTarget('/Applications/Evil.app/Contents/MacOS/evil', 'file')).toBe('/Applications/Evil.app/Contents/MacOS')
+  })
+  test('a file path is labelled as written and leads to its directory', () => {
+    const out = linkify('see /work/repo/package.json:12 now', { paths: new Map([['/work/repo/package.json:12', '/work/repo']]) })
+    expect(out).toBe('see [/work/repo/package.json:12](file:///work/repo) now')
   })
   test('fences inside a quote or a list item are left whole', () => {
     for (const text of ['> ```sh\n> ls /tmp/dir #12\n> ```', '- step\n    ```\n    cd /tmp/dir #12\n    ```', '1. ```\n   #12\n   ```']) {

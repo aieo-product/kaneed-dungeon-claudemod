@@ -73,17 +73,64 @@ export function fileUrl(abs: string): string {
 // a directory macOS runs when it is opened, not shows
 const BUNDLE = /\.(?:app|appex|bundle|framework|plugin|kext|prefpane|qlgenerator|saver|workflow|xpc|mdimporter|action)\/?$/i
 
-/** Whether a path, where it lands, is a directory a click may open: a plain one, not an app or other bundle. */
-export function isPlainDir(realPath: string, kind: 'file' | 'dir' | 'other'): boolean {
-  return kind === 'dir' && !BUNDLE.test(realPath)
+// files whose default handler only shows them, so a link may name the file itself (a cmd-click goes
+// to the OS past any check here). Text goes to an editor, at its line; the rest to its viewer (a page
+// to the browser, for checking one). A script (`.py`, `.sh`, `.command`) or anything unlisted is never
+// opened: its link leads to the directory holding it.
+const TEXT_EXT = new Set(('md markdown mdx txt text rst adoc org log csv tsv json jsonc json5 jsonl ndjson yaml yml toml ini cfg conf xml ' +
+  'ts tsx mts cts js jsx mjs cjs css scss sass less vue svelte astro c h cc cpp cxx hpp hh m mm swift kt kts java scala go rs zig ' +
+  'cs fs dart sql graphql gql proto diff patch lock tf hcl gradle s asm inc cmake mk').split(' '))
+const VIEW_EXT = new Set('png jpg jpeg gif webp bmp tif tiff heic ico pdf html htm'.split(' '))
+
+/** How a file may be opened, by its extension: in an editor, in a viewer, or not at all. */
+export function fileKind(path: string): 'text' | 'view' | undefined {
+  const ext = /\.([^./]+)$/.exec(path)?.[1]?.toLowerCase()
+  if (!ext) return undefined
+  return TEXT_EXT.has(ext) ? 'text' : VIEW_EXT.has(ext) ? 'view' : undefined
 }
 
-/** What opening a pressed path runs (macOS `open`, then `xdg-open`): a plain directory is shown, anything else only revealed. */
-export function openCommands(path: string, kind: 'file' | 'dir' | 'other'): { argv: string[]; fallback: string[]; revealed: boolean } {
-  // a click never runs what it lands on: a file (a script, a `.command`) or an app bundle is revealed, not opened
-  if (kind === 'dir' && !BUNDLE.test(path)) return { argv: ['open', path], fallback: ['xdg-open', path], revealed: false }
+/**
+ * Where a written path's link leads, judged where it lands: a plain directory itself; a file itself
+ * when `openFiles` and its kind is listed, else the directory holding it. Never an app or other
+ * bundle (one a file sits right in, too).
+ */
+export function linkTarget(realPath: string, kind: 'file' | 'dir' | 'other', openFiles = true): string | undefined {
+  if (kind === 'dir') return BUNDLE.test(realPath) ? undefined : realPath
+  if (kind !== 'file') return undefined
+  if (openFiles && fileKind(realPath)) return realPath
+  const parent = realPath.replace(/\/[^/]*$/, '') || '/'
+  return BUNDLE.test(parent) ? undefined : parent
+}
+
+/** An editor's `scheme://file/path:line` URL. */
+const editorUrl = (scheme: string, path: string, line?: number) =>
+  `${scheme}://file${encodeURI(path).replace(/[?#]/g, encodeURIComponent)}${line ? `:${line}` : ''}`
+
+/**
+ * What opening a pressed path runs, tried in order until one succeeds: a plain directory is shown; a
+ * listed file (when `openFiles`) opened, text in an editor at `line`; anything else only revealed.
+ */
+export function openCommands(path: string, kind: 'file' | 'dir' | 'other', opts: { line?: number; openFiles?: boolean } = {}): { cmds: string[][]; revealed: boolean } {
+  const { line, openFiles = true } = opts
+  // a click never runs what it lands on: a script or an app bundle is revealed, not opened
+  if (kind === 'dir' && !BUNDLE.test(path)) return { cmds: [['open', path], ['xdg-open', path]], revealed: false }
+  const fk = kind === 'file' && openFiles ? fileKind(path) : undefined
+  if (fk === 'text') {
+    const at = line ? `${path}:${line}` : path
+    return {
+      cmds: [['code', '-g', at], ['cursor', '-g', at], ['open', editorUrl('vscode', path, line)], ['open', editorUrl('cursor', path, line)], ['open', '-t', path], ['xdg-open', path]],
+      revealed: false,
+    }
+  }
+  if (fk === 'view') return { cmds: [['open', path], ['xdg-open', path]], revealed: false }
   const parent = path.replace(/\/+$/, '').replace(/\/[^/]*$/, '') || '/'
-  return { argv: ['open', '-R', path], fallback: ['xdg-open', parent], revealed: true }
+  return { cmds: [['open', '-R', path], ['xdg-open', parent]], revealed: true }
+}
+
+/** The line a `file://` URL's `#L12` (or `#12`) names. */
+export function lineOfFileUrl(url: string): number | undefined {
+  const m = /#L?(\d+)(?:[-:C].*)?$/.exec(url)
+  return m ? Number(m[1]) : undefined
 }
 
 /** The absolute path a `file://` URL names; undefined for anything else. */
@@ -151,9 +198,15 @@ export function splitFences(text: string): Chunk[] {
   return out.map((c, i) => (i < out.length - 1 ? { ...c, text: `${c.text}\n` } : c))
 }
 
+/** Where a path's link leads: an absolute path, and the line to open a file at. */
+export type LinkDest = string | { path: string; line?: number }
+
+const hrefOf = (dest: LinkDest) =>
+  typeof dest === 'string' ? fileUrl(dest) : `${fileUrl(dest.path)}${dest.line ? `#L${dest.line}` : ''}`
+
 export type LinkifyOptions = {
-  /** Path as written → absolute path, for the paths that exist; others stay text. */
-  paths: ReadonlyMap<string, string>
+  /** Path as written → where its link leads, for the paths that exist; others stay text. */
+  paths: ReadonlyMap<string, LinkDest>
   /** The session's repo, for a bare `#12`. */
   defaultRepo?: { owner: string; repo: string }
 }
@@ -197,15 +250,15 @@ export function linkify(text: string, options: LinkifyOptions): string {
     .join('')
 }
 
-function linkifyPlain(text: string, defs: string, paths: ReadonlyMap<string, string>, defaultRepo?: { owner: string; repo: string }): string {
+function linkifyPlain(text: string, defs: string, paths: ReadonlyMap<string, LinkDest>, defaultRepo?: { owner: string; repo: string }): string {
   // protect, in one pass so nothing is held twice: inline code (made a link when it is just a known
   // path), a Markdown link with or without a title, an autolink, a bare URL
   const held: string[] = []
   const hold = (s: string) => `\uE000${held.push(s) - 1}\uE000`
   let out = text.replace(protectRe(defs), (m, _ticks: string | undefined, inner: string | undefined) => {
     if (inner === undefined) return hold(m)
-    const abs = paths.get(inner.trim())
-    return hold(abs ? `[${escapeLabel(inner.trim())}](${fileUrl(abs)})` : m)
+    const dest = paths.get(inner.trim())
+    return hold(dest ? `[${escapeLabel(inner.trim())}](${hrefOf(dest)})` : m)
   })
   // issue words first: `owner/repo#12` is an issue even where `owner/repo` is also a directory
   out = out.replace(/(^|[\s(（])([\w.-]+)\/([\w.-]+)#(\d+)(?=$|[^\w])/gm, (_m, pre: string, owner: string, repo: string, n: string) =>
@@ -218,8 +271,8 @@ function linkifyPlain(text: string, defs: string, paths: ReadonlyMap<string, str
   if (paths.size) {
     out = out.replace(PATH_RE, m => {
       for (const word of spellingsOf(trimPath(m))) {
-        const abs = paths.get(word)
-        if (abs) return hold(`[${escapeLabel(word)}](${fileUrl(abs)})`) + m.slice(word.length)
+        const dest = paths.get(word)
+        if (dest) return hold(`[${escapeLabel(word)}](${hrefOf(dest)})`) + m.slice(word.length)
       }
       return m
     })

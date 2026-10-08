@@ -8,7 +8,7 @@ import { countEvent, countTool, dash, isTally, newTelemetry, recordAgents, recor
 import { CHECK_EVERY_MS, isNewer, MANIFEST_URL, versionIn } from './game/update.ts'
 import { extractFromMessage, extractLinks, mergeLinks, normalizeUrl, parseHashRefs, type Link, type LinkRow } from './links/extract.ts'
 import { githubSummary, hostSummary, htmlTitle, isFetchable } from './links/summary.ts'
-import { findPaths, isPlainDir, linkify, openCommands, pathOfFileUrl, resolvePath } from './links/linkify.ts'
+import { findPaths, lineOfFileUrl, type LinkDest, linkTarget, linkify, openCommands, pathOfFileUrl, resolvePath, splitLine } from './links/linkify.ts'
 
 // The hooks module. It owns what outlives a session: Kaneed's sheet, the run number, the floor,
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
@@ -220,10 +220,14 @@ const linkRows = (): LinkRow[] => links.map(link => ({ url: link.url, text: link
  * Runs `argv`, then `fallback` when the first exits non-zero or cannot start at all (no `open` on
  * Linux), and toasts the outcome under `shown`.
  */
-async function runOpener($: EngineInterface, argv: string[], fallback: string[], shown: string) {
-  const run = (cmd: string[]) => $.process.run(cmd, { timeoutMs: 10000 })
-  let result = await run(argv).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
-  if (result.exitCode !== 0) result = await run(fallback).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
+/** Runs the first of `cmds` that succeeds (`open`, then `xdg-open`, or an editor before them). */
+async function runOpener($: EngineInterface, cmds: string[][], shown: string) {
+  const run = (cmd: string[]) => $.process.run(cmd, { timeoutMs: 10000 }).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
+  let result = { exitCode: -1, stdout: '', stderr: '' }
+  for (const cmd of cmds) {
+    result = await run(cmd)
+    if (result.exitCode === 0) break
+  }
   if (result.exitCode === 0) $.ui.toast(`開きました: ${shown}`)
   else $.ui.toast(`開けませんでした: ${shown} (${result.stderr.trim().split('\n')[0] || `exit ${result.exitCode}`})`)
 }
@@ -231,33 +235,43 @@ async function runOpener($: EngineInterface, argv: string[], fallback: string[],
 /** Opens a listed link in the browser; a URL the list does not hold is refused. */
 async function openLink($: EngineInterface, url: string) {
   if (!links.some(link => link.url === url)) return
-  await runOpener($, ['open', url], ['xdg-open', url], url)
+  await runOpener($, [['open', url], ['xdg-open', url]], url)
 }
 
-// ---- links in the transcript: a click on a directory, an issue word or a URL in a reply opens it ----
-// The reply is drawn again as Markdown with its directories and `#12` words made links. Only a plain
-// directory (judged where it lands, never an app bundle) is made one: a terminal opens a `file://`
-// link with the OS handler on a cmd-click, past any check here, so a file must never be a link. The
-// `Markdown` `onLinkPress` hands a plain click here: a directory opens in Finder, a URL in the browser,
-// and a `file://` link the reply wrote itself is only revealed unless it is a plain directory.
+// ---- links in the transcript: a click on a path, an issue word or a URL in a reply opens it ----
+// The reply is drawn again as Markdown with its paths and `#12` words made links, each judged where it
+// lands. A terminal opens a `file://` link with the OS handler on a cmd-click, past any check here, so
+// a link leads only to what opening cannot run: a plain directory (never an app bundle), or a file of
+// a listed kind (text, images, PDF) at its `#L12`; any other file's link leads to its directory. The
+// option openFiles off sends every file's link to its directory. The `Markdown` `onLinkPress` hands a
+// plain click here: a directory opens in Finder, text in an editor at its line, a URL in the browser,
+// and a `file://` link the reply wrote itself to anything else is only revealed.
 
 let cwd = ''
 let home: string | undefined
-// absolute path → the directory it lands on, or false (missing, a file, an app); dropped whenever a
-// tool may have changed the files
-const dirs = new Map<string, string | false>()
+// the openFiles option: whether a path's link may lead to the file itself
+let openFiles = true
+// absolute path → where its link leads (the file, or a directory), or false (missing, an app); dropped
+// whenever a tool may have changed the files
+type Target = { path: string; file: boolean }
+const targets = new Map<string, Target | false>()
 
 /** After a tool ran or a turn ended: files may have come or gone, and `/cd` may have moved the session. */
 async function refreshPaths($: EngineInterface) {
-  dirs.clear()
+  targets.clear()
   cwd = await $.session.cwd().catch(() => cwd)
   // the replies already drawn ask again
   $.ui.invalidate('ui.render')
 }
 const STAT_PER_DRAW = 40
 
-async function knownPaths($: EngineInterface, text: string): Promise<Map<string, string>> {
-  const found = new Map<string, string>()
+async function knownPaths($: EngineInterface, text: string): Promise<Map<string, LinkDest>> {
+  const found = new Map<string, LinkDest>()
+  // a file's link carries the line written after it; a directory's does not
+  const dest = (written: string, target: Target): LinkDest => {
+    const { line } = splitLine(written)
+    return target.file && line ? { path: target.path, line } : target.path
+  }
   const ask: Promise<void>[] = []
   const candidates = findPaths(text)
   // a relative path is read against where the session is now (`/cd` moves it mid-turn)
@@ -265,15 +279,18 @@ async function knownPaths($: EngineInterface, text: string): Promise<Map<string,
   for (const written of candidates) {
     const abs = resolvePath(written, cwd, home)
     if (!abs) continue
-    const known = dirs.get(abs)
-    if (known) found.set(written, known)
+    const known = targets.get(abs)
+    if (known) found.set(written, dest(written, known))
     else if (known === undefined && ask.length < STAT_PER_DRAW) {
       ask.push($.fs.stat(abs, { resolve: true }).then(
-        stat => (stat.realPath && isPlainDir(stat.realPath, stat.kind) ? stat.realPath : false),
+        stat => {
+          const path = stat.realPath && linkTarget(stat.realPath, stat.kind, openFiles)
+          return path ? { path, file: path === stat.realPath && stat.kind === 'file' } : false
+        },
         () => false as const,
       ).then(target => {
-        dirs.set(abs, target)
-        if (target) found.set(written, target)
+        targets.set(abs, target)
+        if (target) found.set(written, dest(written, target))
       }))
     }
   }
@@ -287,8 +304,7 @@ async function knownPaths($: EngineInterface, text: string): Promise<Map<string,
  */
 async function openPressed($: EngineInterface, href: string) {
   const path = pathOfFileUrl(href)
-  let argv: string[]
-  let fallback: string[]
+  let cmds: string[][]
   let shown: string
   if (path) {
     // judged by where it lands: a link named `docs` may lead to an app
@@ -297,16 +313,14 @@ async function openPressed($: EngineInterface, href: string) {
       $.ui.toast(`見つかりません: ${path}`)
       return
     }
-    const plan = openCommands(stat.realPath ?? path, stat.realPath ? stat.kind : 'other')
-    argv = plan.argv
-    fallback = plan.fallback
+    const plan = openCommands(stat.realPath ?? path, stat.realPath ? stat.kind : 'other', { line: lineOfFileUrl(href), openFiles })
+    cmds = plan.cmds
     shown = plan.revealed ? `${path}（Finder で表示）` : path
   } else if (/^https?:\/\//.test(href)) {
-    argv = ['open', href]
-    fallback = ['xdg-open', href]
+    cmds = [['open', href], ['xdg-open', href]]
     shown = href
   } else return
-  await runOpener($, argv, fallback, shown)
+  await runOpener($, cmds, shown)
 }
 
 // summaries cost a `gh api` or a page fetch each: asked for only while the tab is open, not awaited
@@ -316,6 +330,7 @@ function fillIfOpen($: EngineInterface) {
 
 export const register: Register = (on, options) => {
   linkTitles = options.linkTitles !== false
+  openFiles = options.openFiles !== false
 
   on('session.start', async ($, e, next) => {
     const r = await next(e)
