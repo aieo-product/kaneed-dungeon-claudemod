@@ -28,7 +28,8 @@ describe('resolvePath', () => {
   test('home, relative and dot segments', () => {
     expect(resolvePath('~/a/b', cwd, home)).toBe('/Users/me/a/b')
     expect(resolvePath('hooks/register.tsx:12:3', cwd, home)).toBe('/work/repo/hooks/register.tsx')
-    expect(resolvePath('../other/./x', cwd, home)).toBe('/work/other/x')
+    // `..` is left for the file system: past a symbolic link it is not the name before it
+    expect(resolvePath('../other/./x', cwd, home)).toBe('/work/repo/../other/x')
     expect(resolvePath('~/a', cwd)).toBeUndefined()
   })
   test('splitLine', () => {
@@ -177,5 +178,34 @@ describe('review #51 round 3', () => {
     expect(trimPath('/tmp/dir.')).toBe('/tmp/dir')
     expect(findPaths('go up with hooks/.. now')).toEqual(['hooks/..'])
     expect(linkify('go up with hooks/.. now', { paths: new Map([['hooks/..', '/w']]) })).toBe('go up with [hooks/..](file:///w) now')
+  })
+})
+
+describe('review #51 round 4', () => {
+  const repo = { owner: 'o', repo: 'r' }
+  const dir = new Map([['/tmp/dir', '/tmp/dir']])
+  test('a quoted fence line inside a plain fence does not close it', () => {
+    const text = '```\n> ```\n> #12 /tmp/dir\n```\n#3'
+    expect(linkify(text, { paths: dir, defaultRepo: repo })).toBe('```\n> ```\n> #12 /tmp/dir\n```\n[#3](https://github.com/o/r/issues/3)')
+  })
+  test('a code span ending in a line break is left whole', () => {
+    const text = 'run `\ncd /tmp/dir #12\n` now'
+    expect(linkify(text, { paths: dir, defaultRepo: repo })).toBe(text)
+  })
+  test('a link whose label holds brackets, and a quoted definition, are left whole', () => {
+    for (const text of ['[#12 and [closed]](https://example.com)', '> [#12]: https://example.com/x\n\nsee [#12]']) {
+      expect(linkify(text, { paths: dir, defaultRepo: repo })).toBe(text)
+    }
+  })
+  test('a file URL loses its fragment and query, not an encoded #', () => {
+    expect(pathOfFileUrl('file:///work/repo/main.ts#L12')).toBe('/work/repo/main.ts')
+    expect(pathOfFileUrl('file:///work/a?x=1')).toBe('/work/a')
+    expect(pathOfFileUrl('file:///work/a%23b')).toBe('/work/a#b')
+  })
+})
+
+describe('issue words after Japanese punctuation', () => {
+  test('、#47 and 。#3 are issue words', () => {
+    expect(linkify('ファイル、#47。#3', { paths: new Map(), defaultRepo: { owner: 'o', repo: 'r' } })).toBe('ファイル、[#47](https://github.com/o/r/issues/47)。[#3](https://github.com/o/r/issues/3)')
   })
 })

@@ -259,7 +259,10 @@ const STAT_PER_DRAW = 40
 async function knownPaths($: EngineInterface, text: string): Promise<Map<string, string>> {
   const found = new Map<string, string>()
   const ask: Promise<void>[] = []
-  for (const written of findPaths(text)) {
+  const candidates = findPaths(text)
+  // a relative path is read against where the session is now (`/cd` moves it mid-turn)
+  if (candidates.some(p => !p.startsWith('/') && !p.startsWith('~/'))) cwd = await $.session.cwd().catch(() => cwd)
+  for (const written of candidates) {
     const abs = resolvePath(written, cwd, home)
     if (!abs) continue
     const known = dirs.get(abs)

@@ -48,7 +48,10 @@ export function looksLikePath(word: string): boolean {
   return /^[\w.@+-][\p{L}\p{N}\p{M}_.@+-]*\/[\p{L}\p{N}\p{M}_.@+/-]*$/u.test(path) && !/^\d+\/\d+/.test(path)
 }
 
-/** Where a written path leads: `~` against `home`, a relative one against `cwd`, `.` and `..` folded. */
+/**
+ * Where a written path leads: `~` against `home`, a relative one against `cwd`. `.` is dropped but
+ * `..` is kept, for the file system to fold: past a symbolic link it is not the name before it.
+ */
 export function resolvePath(written: string, cwd: string, home?: string): string | undefined {
   const { path } = splitLine(written)
   let abs: string
@@ -57,13 +60,7 @@ export function resolvePath(written: string, cwd: string, home?: string): string
     abs = `${home}/${path.slice(2)}`
   } else if (path.startsWith('/')) abs = path
   else abs = `${cwd}/${path}`
-  const parts: string[] = []
-  for (const part of abs.split('/')) {
-    if (part === '' || part === '.') continue
-    if (part === '..') parts.pop()
-    else parts.push(part)
-  }
-  return `/${parts.join('/')}`
+  return `/${abs.split('/').filter(part => part !== '' && part !== '.').join('/')}`
 }
 
 /** A `file://` URL for an absolute path, every segment percent-encoded. */
@@ -93,7 +90,8 @@ export function openCommands(path: string, kind: 'file' | 'dir' | 'other'): { ar
 export function pathOfFileUrl(url: string): string | undefined {
   if (!url.startsWith('file://')) return undefined
   try {
-    const path = decodeURIComponent(url.slice('file://'.length).replace(/^localhost/, ''))
+    // the path alone: a `#L12` or `?x` is not part of the file's name (an encoded `%23` still is)
+    const path = decodeURIComponent(url.slice('file://'.length).replace(/^localhost/, '').replace(/[?#].*$/, ''))
     return path.startsWith('/') ? path : undefined
   } catch {
     return undefined
@@ -128,7 +126,7 @@ type Chunk = { text: string; fenced: boolean }
 export function splitFences(text: string): Chunk[] {
   const out: Chunk[] = []
   let buf: string[] = []
-  let open: { char: string; len: number } | undefined
+  let open: { char: string; len: number; quotes: number } | undefined
   const flush = (fenced: boolean) => {
     if (buf.length) out.push({ text: buf.join('\n'), fenced })
     buf = []
@@ -136,11 +134,13 @@ export function splitFences(text: string): Chunk[] {
   for (const line of text.split('\n')) {
     // inside a quote (`> `) or a list item (`- `, `1. `, indented) too
     const m = /^(?:[ \t]*(?:>|[-*+](?=[ \t])|\d+[.)](?=[ \t])))*[ \t]*(`{3,}|~{3,})(.*)$/.exec(line)
+    // a fence closes only in the container it opened in: as many `>` before it
+    const quotes = m ? (line.slice(0, line.indexOf(m[1]!)).match(/>/g) ?? []).length : 0
     if (!open && m && !(m[1]![0] === '`' && m[2]!.includes('`'))) {
       flush(false)
-      open = { char: m[1]![0]!, len: m[1]!.length }
+      open = { char: m[1]![0]!, len: m[1]!.length, quotes }
       buf.push(line)
-    } else if (open && m && m[1]![0] === open.char && m[1]!.length >= open.len && m[2]!.trim() === '') {
+    } else if (open && m && m[1]![0] === open.char && m[1]!.length >= open.len && m[2]!.trim() === '' && quotes === open.quotes) {
       buf.push(line)
       flush(true)
       open = undefined
@@ -160,14 +160,15 @@ export type LinkifyOptions = {
 
 const PROTECT = [
   // inline code, which may run over a line break but not a blank line
-  /(`+)(?!`)((?:(?!\n[ \t]*\n)[\s\S])*?[^`\n])\1(?!`)/.source,
+  /(`+)(?!`)((?:(?!\n[ \t]*\n)[\s\S])*?[^`])\1(?!`)/.source,
   // a line indented as code (four spaces or a tab, inside quotes too): left whole, a list item's
   // deeper lines with it, rather than risk rewriting an indented code block
   /^(?:[ \t]*>[ \t]?)*(?: {4}|\t)[^\n]*$/.source,
-  /\[[^\]\n]*\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/.source,
-  // a reference link (`[text][ref]`, `[text][]`) and a reference definition line (`[ref]: url`)
-  /\[[^\]\n]*\]\[[^\]\n]*\]/.source,
-  /^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S[^\n]*$/.source,
+  // an inline link, its label holding one level of brackets (`[a [b]](url)`), with or without a title
+  /\[(?:[^[\]\n]|\[[^[\]\n]*\])*\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/.source,
+  // a reference link (`[text][ref]`, `[text][]`) and a reference definition line (`[ref]: url`, quoted too)
+  /\[(?:[^[\]\n]|\[[^[\]\n]*\])*\]\[[^\]\n]*\]/.source,
+  /^(?:[ \t]*>)*[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S[^\n]*$/.source,
   /<https?:[^>\s]+>/.source,
   /https?:\/\/[^\s<>"'`　]+/.source,
 ]
@@ -176,7 +177,7 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /** The protecting pattern, with a shortcut reference (`[label]`) for each label the text defines. */
 function protectRe(text: string): RegExp {
-  const labels = [...text.matchAll(/^[ \t]{0,3}\[([^\]\n]+)\]:/gm)].map(m => escapeRe(m[1]!))
+  const labels = [...text.matchAll(/^(?:[ \t]*>)*[ \t]{0,3}\[([^\]\n]+)\]:/gm)].map(m => escapeRe(m[1]!))
   const shortcut = labels.length ? [`\\[(?:${labels.join('|')})\\](?![(\\[])`] : []
   return new RegExp([...PROTECT, ...shortcut].join('|'), 'gmi')
 }
@@ -210,7 +211,8 @@ function linkifyPlain(text: string, defs: string, paths: ReadonlyMap<string, str
   out = out.replace(/(^|[\s(（])([\w.-]+)\/([\w.-]+)#(\d+)(?=$|[^\w])/gm, (_m, pre: string, owner: string, repo: string, n: string) =>
     `${pre}${hold(`[${owner}/${repo}#${n}](https://github.com/${owner}/${repo}/issues/${n})`)}`)
   if (defaultRepo) {
-    out = out.replace(/(^|[\s(（「[])#(\d{1,5})(?=$|[^\w#])/gm, (_m, pre: string, n: string) =>
+    // after Japanese punctuation too (`ファイル、#47`)
+    out = out.replace(/(^|[\s(（「[、。，：])#(\d{1,5})(?=$|[^\w#])/gm, (_m, pre: string, n: string) =>
       `${pre}${hold(`[#${n}](https://github.com/${defaultRepo.owner}/${defaultRepo.repo}/issues/${n})`)}`)
   }
   if (paths.size) {
