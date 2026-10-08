@@ -8,6 +8,7 @@ import { countEvent, countTool, dash, isTally, newTelemetry, recordAgents, recor
 import { CHECK_EVERY_MS, isNewer, MANIFEST_URL, versionIn } from './game/update.ts'
 import { extractFromMessage, extractLinks, mergeLinks, normalizeUrl, parseHashRefs, type Link, type LinkRow } from './links/extract.ts'
 import { githubSummary, hostSummary, htmlTitle, isFetchable } from './links/summary.ts'
+import { findPaths, lineOfFileUrl, type LinkDest, linkTarget, linkify, openCommands, pathOfFileUrl, resolvePath, splitLine } from './links/linkify.ts'
 
 // The hooks module. It owns what outlives a session: Kaneed's sheet, the run number, the floor,
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
@@ -215,17 +216,111 @@ async function fillLinks($: EngineInterface, fetchTitles: boolean) {
 /** The rows the board draws. */
 const linkRows = (): LinkRow[] => links.map(link => ({ url: link.url, text: link.summary ?? link.label ?? hostSummary(link.url), kind: link.kind }))
 
+/**
+ * Runs `argv`, then `fallback` when the first exits non-zero or cannot start at all (no `open` on
+ * Linux), and toasts the outcome under `shown`.
+ */
+/** Runs the first of `cmds` that succeeds (`open`, then `xdg-open`, or an editor before them). */
+async function runOpener($: EngineInterface, cmds: string[][], shown: string) {
+  const run = (cmd: string[]) => $.process.run(cmd, { timeoutMs: 10000 }).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
+  let result = { exitCode: -1, stdout: '', stderr: '' }
+  for (const cmd of cmds) {
+    result = await run(cmd)
+    if (result.exitCode === 0) break
+  }
+  if (result.exitCode === 0) $.ui.toast(`開きました: ${shown}`)
+  else $.ui.toast(`開けませんでした: ${shown} (${result.stderr.trim().split('\n')[0] || `exit ${result.exitCode}`})`)
+}
+
 /** Opens a listed link in the browser; a URL the list does not hold is refused. */
 async function openLink($: EngineInterface, url: string) {
   if (!links.some(link => link.url === url)) return
-  try {
-    let result = await $.process.run(['open', url], { timeoutMs: 10000 })
-    if (result.exitCode !== 0) result = await $.process.run(['xdg-open', url], { timeoutMs: 10000 })
-    if (result.exitCode === 0) $.ui.toast(`開きました: ${url}`)
-    else $.ui.toast(`開けませんでした: ${url} (${result.stderr.trim().split('\n')[0] || `exit ${result.exitCode}`})`)
-  } catch (err) {
-    $.ui.toast(`開けませんでした: ${url} (${err})`)
+  await runOpener($, [['open', url], ['xdg-open', url]], url)
+}
+
+// ---- links in the transcript: a click on a path, an issue word or a URL in a reply opens it ----
+// The reply is drawn again as Markdown with its paths and `#12` words made links, each judged where it
+// lands. A terminal opens a `file://` link with the OS handler on a cmd-click, past any check here, so
+// a link leads only to what opening cannot run: a plain directory (never an app bundle), or a file of
+// a listed kind (text, images, PDF) at its `#L12`; any other file's link leads to its directory. The
+// option openFiles off sends every file's link to its directory. The `Markdown` `onLinkPress` hands a
+// plain click here: a directory opens in Finder, text in an editor at its line, a URL in the browser,
+// and a `file://` link the reply wrote itself to anything else is only revealed.
+
+let cwd = ''
+let home: string | undefined
+// the openFiles option: whether a path's link may lead to the file itself
+let openFiles = true
+// absolute path → where its link leads (the file, or a directory), or false (missing, an app); dropped
+// whenever a tool may have changed the files
+type Target = { path: string; file: boolean }
+const targets = new Map<string, Target | false>()
+
+/** After a tool ran or a turn ended: files may have come or gone, and `/cd` may have moved the session. */
+async function refreshPaths($: EngineInterface) {
+  targets.clear()
+  cwd = await $.session.cwd().catch(() => cwd)
+  // the replies already drawn ask again
+  $.ui.invalidate('ui.render')
+}
+const STAT_PER_DRAW = 40
+
+async function knownPaths($: EngineInterface, text: string): Promise<Map<string, LinkDest>> {
+  const found = new Map<string, LinkDest>()
+  // a file's link carries the line written after it; a directory's does not
+  const dest = (written: string, target: Target): LinkDest => {
+    const { line } = splitLine(written)
+    return target.file && line ? { path: target.path, line } : target.path
   }
+  const ask: Promise<void>[] = []
+  const candidates = findPaths(text)
+  // a relative path is read against where the session is now (`/cd` moves it mid-turn)
+  if (candidates.some(p => !p.startsWith('/') && !p.startsWith('~/'))) cwd = await $.session.cwd().catch(() => cwd)
+  for (const written of candidates) {
+    const abs = resolvePath(written, cwd, home)
+    if (!abs) continue
+    const known = targets.get(abs)
+    if (known) found.set(written, dest(written, known))
+    else if (known === undefined && ask.length < STAT_PER_DRAW) {
+      ask.push($.fs.stat(abs, { resolve: true }).then(
+        stat => {
+          const path = stat.realPath && linkTarget(stat.realPath, stat.kind, openFiles)
+          return path ? { path, file: path === stat.realPath && stat.kind === 'file' } : false
+        },
+        () => false as const,
+      ).then(target => {
+        targets.set(abs, target)
+        if (target) found.set(written, dest(written, target))
+      }))
+    }
+  }
+  await Promise.all(ask)
+  return found
+}
+
+/**
+ * Opens a pressed link: a plain directory in Finder, a file or an app bundle only revealed there (a
+ * click must not run a script or an app the reply named), an http(s) URL in the browser.
+ */
+async function openPressed($: EngineInterface, href: string) {
+  const path = pathOfFileUrl(href)
+  let cmds: string[][]
+  let shown: string
+  if (path) {
+    // judged by where it lands: a link named `docs` may lead to an app
+    const stat = await $.fs.stat(path, { resolve: true }).catch(() => undefined)
+    if (!stat) {
+      $.ui.toast(`見つかりません: ${path}`)
+      return
+    }
+    const plan = openCommands(stat.realPath ?? path, stat.realPath ? stat.kind : 'other', { line: lineOfFileUrl(href), openFiles })
+    cmds = plan.cmds
+    shown = plan.revealed ? `${path}（Finder で表示）` : path
+  } else if (/^https?:\/\//.test(href)) {
+    cmds = [['open', href], ['xdg-open', href]]
+    shown = href
+  } else return
+  await runOpener($, cmds, shown)
 }
 
 // summaries cost a `gh api` or a page fetch each: asked for only while the tab is open, not awaited
@@ -235,6 +330,7 @@ function fillIfOpen($: EngineInterface) {
 
 export const register: Register = (on, options) => {
   linkTitles = options.linkTitles !== false
+  openFiles = options.openFiles !== false
 
   on('session.start', async ($, e, next) => {
     const r = await next(e)
@@ -253,6 +349,8 @@ export const register: Register = (on, options) => {
     tele = newTelemetry(now)
     await refreshUsage($)
     await startLinks($)
+    cwd = await $.session.cwd().catch(() => '')
+    home = (await $.env.get('HOME').catch(() => undefined)) || undefined
     ready = true
     $.ui.invalidate('ui.render')
     // not awaited: the session starts while the check is in flight
@@ -312,6 +410,7 @@ export const register: Register = (on, options) => {
   })
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
+    await refreshPaths($)
     recordTurn(tele, { usage: e.usage, ms: e.durationMs, agentId: e.agentId, turnId: e.turnId, reason: e.reason }, await $.clock.now())
     // a subagent's turn ending is not the main turn ending
     if (e.agentId === undefined) {
@@ -355,6 +454,7 @@ export const register: Register = (on, options) => {
   // a passing test run is the one heal Claude can give Kaneed
   on('tool.call', async ($, e, next) => {
     const r = await next(e)
+    if (!('isReadOnly' in r && r.isReadOnly)) await refreshPaths($)
     const now = await $.clock.now()
     countTool(tele, e.tool, now)
     const command = (e as { command?: unknown }).command
@@ -400,6 +500,25 @@ export const register: Register = (on, options) => {
 
   const props = () => ({ view, working, seed, saved: hero, run, floorNum, heals, fails, settings, room, history: history.slice(-40), hall: hall.slice(-8), ...(view === 'dash' ? { dash: dash(tele) } : {}), ...(view === 'links' ? { links: linkRows() } : {}) })
   // (a Client's props are plain data: a key holding undefined is refused, so the dashboard's and the links are left out)
+
+  // a reply in the transcript, its paths and issue words made links a click opens
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    if (!ready || e.surface !== 'terminal' || e.props.isSummary) return next(e)
+    const paths = await knownPaths($, e.props.text)
+    const text = linkify(e.props.text, { paths, defaultRepo })
+    // nothing of ours to answer: the engine draws it (a `file://` link the reply wrote still needs our press)
+    if (text === e.props.text && !/(?:https?|file):\/\//.test(text)) return next(e)
+    const { Box, Markdown, Text } = await $.ui.resolve(e)
+    // a tree of our own loses the engine's bullet, so the reply's first block draws it here
+    return (
+      <Box flexDirection="row">
+        <Box width={2} flexShrink={0}><Text>{e.props.isFirstOfReply ? '⏺' : ' '}</Text></Box>
+        <Box flexGrow={1} flexShrink={1}>
+          <Markdown key="kaneed:reply" text={text} onLinkPress={link => void openPressed($, link.href)} />
+        </Box>
+      </Box>
+    )
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (!ready || !visible || e.props.hasSurvey || e.surface !== 'terminal') return next(e)
