@@ -1,0 +1,7 @@
+
+tests/reply-links.test.ts:
+(pass) reply links > paths and issue words become links, and a press opens them [142.36ms]
+
+ 1 pass
+ 0 fail
+Ran 1 test across 1 file. [0.29s]
