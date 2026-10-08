@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { fileUrl, findPaths, linkify, looksLikePath, pathOfFileUrl, resolvePath, splitLine } from '../hooks/links/linkify.ts'
+import { fileUrl, findPaths, linkify, looksLikePath, openCommands, pathOfFileUrl, resolvePath, splitLine } from '../hooks/links/linkify.ts'
 
 const cwd = '/work/repo'
 const home = '/Users/me'
@@ -65,5 +65,57 @@ describe('linkify', () => {
     const paths = new Map([['/tmp/dir', '/tmp/dir']])
     const text = '```sh\nls /tmp/dir #1\n```\n[x](https://e.com/#2) https://e.com/tmp/dir'
     expect(linkify(text, { paths, defaultRepo: { owner: 'o', repo: 'r' } })).toBe(text)
+  })
+})
+
+describe('openCommands', () => {
+  test('a plain directory is opened', () => {
+    expect(openCommands('/work/repo/docs', 'dir')).toEqual({ argv: ['open', '/work/repo/docs'], fallback: ['xdg-open', '/work/repo/docs'], revealed: false })
+  })
+  test('a file, an app bundle or an unknown is only revealed, never run', () => {
+    expect(openCommands('/tmp/evil.command', 'file')).toEqual({ argv: ['open', '-R', '/tmp/evil.command'], fallback: ['xdg-open', '/tmp'], revealed: true })
+    expect(openCommands('/Applications/Evil.app', 'dir').argv).toEqual(['open', '-R', '/Applications/Evil.app'])
+    expect(openCommands('/x/Thing.WORKFLOW/', 'dir').revealed).toBe(true)
+    expect(openCommands('/x/y', 'other').revealed).toBe(true)
+    expect(openCommands('/top', 'file').fallback).toEqual(['xdg-open', '/'])
+  })
+})
+
+describe('link text', () => {
+  test('a path with parens stays one link target', () => {
+    const url = fileUrl('/a/b (1)/c')
+    expect(url).toBe('file:///a/b%20%281%29/c')
+    expect(pathOfFileUrl(url)).toBe('/a/b (1)/c')
+  })
+  test('emphasis marks in a label are escaped', () => {
+    const paths = new Map([['pkg/__init__.py', '/w/pkg/__init__.py']])
+    expect(linkify('see pkg/__init__.py', { paths })).toBe('see [pkg/\\_\\_init\\_\\_.py](file:///w/pkg/__init__.py)')
+  })
+})
+
+describe('review #51: the reply is never corrupted', () => {
+  const repo = { owner: 'o', repo: 'r' }
+  test('a URL in backticks stays as written', () => {
+    const text = 'Use `https://example.com` here and `curl https://x.dev/a` too'
+    expect(linkify(text, { paths: new Map(), defaultRepo: repo })).toBe(text)
+  })
+  test('a ```` fence holding a ``` block is left whole', () => {
+    const text = '````md\n```sh\nls /tmp/dir\n```\nsee #12\n````\nafter #3'
+    const out = linkify(text, { paths: new Map([['/tmp/dir', '/tmp/dir']]), defaultRepo: repo })
+    expect(out).toBe('````md\n```sh\nls /tmp/dir\n```\nsee #12\n````\nafter [#3](https://github.com/o/r/issues/3)')
+  })
+  test('a ~~~ fence is not closed by ```', () => {
+    const text = '~~~\n```\n#12\n~~~\n#4'
+    expect(linkify(text, { paths: new Map(), defaultRepo: repo })).toBe('~~~\n```\n#12\n~~~\n[#4](https://github.com/o/r/issues/4)')
+  })
+  test('a Markdown link with a title is left whole', () => {
+    const paths = new Map([['/tmp/dir', '/tmp/dir']])
+    for (const text of ['[#12](https://example.com "Issue")', "[/tmp/dir](https://e.com/x 'title')", '[a](https://e.com/(x))']) {
+      expect(linkify(text, { paths, defaultRepo: repo })).toBe(text)
+    }
+  })
+  test('the placeholder mark never leaks', () => {
+    const text = '`a` https://e.com `#1` [x](https://e.com "t") `` `b` `` #2'
+    expect(linkify(text, { paths: new Map(), defaultRepo: repo })).not.toContain('')
   })
 })

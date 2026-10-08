@@ -8,7 +8,7 @@ import { countEvent, countTool, dash, isTally, newTelemetry, recordAgents, recor
 import { CHECK_EVERY_MS, isNewer, MANIFEST_URL, versionIn } from './game/update.ts'
 import { extractFromMessage, extractLinks, mergeLinks, normalizeUrl, parseHashRefs, type Link, type LinkRow } from './links/extract.ts'
 import { githubSummary, hostSummary, htmlTitle, isFetchable } from './links/summary.ts'
-import { findPaths, linkify, pathOfFileUrl, resolvePath } from './links/linkify.ts'
+import { findPaths, linkify, openCommands, pathOfFileUrl, resolvePath } from './links/linkify.ts'
 
 // The hooks module. It owns what outlives a session: Kaneed's sheet, the run number, the floor,
 // the action log and the hall of past runs, all in $.store. The board (./boards/dungeon.tsx) runs
@@ -216,17 +216,22 @@ async function fillLinks($: EngineInterface, fetchTitles: boolean) {
 /** The rows the board draws. */
 const linkRows = (): LinkRow[] => links.map(link => ({ url: link.url, text: link.summary ?? link.label ?? hostSummary(link.url), kind: link.kind }))
 
+/**
+ * Runs `argv`, then `fallback` when the first exits non-zero or cannot start at all (no `open` on
+ * Linux), and toasts the outcome under `shown`.
+ */
+async function runOpener($: EngineInterface, argv: string[], fallback: string[], shown: string) {
+  const run = (cmd: string[]) => $.process.run(cmd, { timeoutMs: 10000 })
+  let result = await run(argv).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
+  if (result.exitCode !== 0) result = await run(fallback).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
+  if (result.exitCode === 0) $.ui.toast(`開きました: ${shown}`)
+  else $.ui.toast(`開けませんでした: ${shown} (${result.stderr.trim().split('\n')[0] || `exit ${result.exitCode}`})`)
+}
+
 /** Opens a listed link in the browser; a URL the list does not hold is refused. */
 async function openLink($: EngineInterface, url: string) {
   if (!links.some(link => link.url === url)) return
-  try {
-    let result = await $.process.run(['open', url], { timeoutMs: 10000 })
-    if (result.exitCode !== 0) result = await $.process.run(['xdg-open', url], { timeoutMs: 10000 })
-    if (result.exitCode === 0) $.ui.toast(`開きました: ${url}`)
-    else $.ui.toast(`開けませんでした: ${url} (${result.stderr.trim().split('\n')[0] || `exit ${result.exitCode}`})`)
-  } catch (err) {
-    $.ui.toast(`開けませんでした: ${url} (${err})`)
-  }
+  await runOpener($, ['open', url], ['xdg-open', url], url)
 }
 
 // ---- links in the transcript: a click on a path, an issue word or a URL in a reply opens it ----
@@ -236,8 +241,14 @@ async function openLink($: EngineInterface, url: string) {
 
 let cwd = ''
 let home: string | undefined
-// absolute path → whether it exists; asked once per path
+// absolute path → whether it exists; dropped whenever a tool may have changed the files
 const exists = new Map<string, boolean>()
+
+/** After a tool ran or a turn ended: files may have come or gone, and `/cd` may have moved the session. */
+async function refreshPaths($: EngineInterface) {
+  exists.clear()
+  cwd = await $.session.cwd().catch(() => cwd)
+}
 const STAT_PER_DRAW = 40
 
 async function knownPaths($: EngineInterface, text: string): Promise<Map<string, string>> {
@@ -259,19 +270,32 @@ async function knownPaths($: EngineInterface, text: string): Promise<Map<string,
   return found
 }
 
-/** Opens a pressed link: a `file://` path with `open` (a directory in Finder), an http(s) URL in the browser. */
+/**
+ * Opens a pressed link: a plain directory in Finder, a file or an app bundle only revealed there (a
+ * click must not run a script or an app the reply named), an http(s) URL in the browser.
+ */
 async function openPressed($: EngineInterface, href: string) {
   const path = pathOfFileUrl(href)
-  const target = path ?? (/^https?:\/\//.test(href) ? href : undefined)
-  if (!target) return
-  try {
-    let result = await $.process.run(['open', target], { timeoutMs: 10000 })
-    if (result.exitCode !== 0) result = await $.process.run(['xdg-open', target], { timeoutMs: 10000 })
-    if (result.exitCode === 0) $.ui.toast(`開きました: ${target}`)
-    else $.ui.toast(`開けませんでした: ${target} (${result.stderr.trim().split('\n')[0] || `exit ${result.exitCode}`})`)
-  } catch (err) {
-    $.ui.toast(`開けませんでした: ${target} (${err})`)
-  }
+  let argv: string[]
+  let fallback: string[]
+  let shown: string
+  if (path) {
+    // judged by where it lands: a link named `docs` may lead to an app
+    const stat = await $.fs.stat(path, { resolve: true }).catch(() => undefined)
+    if (!stat) {
+      $.ui.toast(`見つかりません: ${path}`)
+      return
+    }
+    const plan = openCommands(stat.realPath ?? path, stat.realPath ? stat.kind : 'other')
+    argv = plan.argv
+    fallback = plan.fallback
+    shown = plan.revealed ? `${path}（Finder で表示）` : path
+  } else if (/^https?:\/\//.test(href)) {
+    argv = ['open', href]
+    fallback = ['xdg-open', href]
+    shown = href
+  } else return
+  await runOpener($, argv, fallback, shown)
 }
 
 // summaries cost a `gh api` or a page fetch each: asked for only while the tab is open, not awaited
@@ -360,6 +384,7 @@ export const register: Register = (on, options) => {
   })
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
+    await refreshPaths($)
     recordTurn(tele, { usage: e.usage, ms: e.durationMs, agentId: e.agentId, turnId: e.turnId, reason: e.reason }, await $.clock.now())
     // a subagent's turn ending is not the main turn ending
     if (e.agentId === undefined) {
@@ -403,6 +428,7 @@ export const register: Register = (on, options) => {
   // a passing test run is the one heal Claude can give Kaneed
   on('tool.call', async ($, e, next) => {
     const r = await next(e)
+    if (!('isReadOnly' in r && r.isReadOnly)) await refreshPaths($)
     const now = await $.clock.now()
     countTool(tele, e.tool, now)
     const command = (e as { command?: unknown }).command

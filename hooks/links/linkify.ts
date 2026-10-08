@@ -49,7 +49,20 @@ export function resolvePath(written: string, cwd: string, home?: string): string
 
 /** A `file://` URL for an absolute path, every segment percent-encoded. */
 export function fileUrl(abs: string): string {
-  return `file://${abs.split('/').map(encodeURIComponent).join('/')}`
+  // `(` and `)` too: a Markdown link target ends at the first unbalanced `)`
+  const encode = (seg: string) => encodeURIComponent(seg).replace(/[()]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+  return `file://${abs.split('/').map(encode).join('/')}`
+}
+
+// a directory macOS runs when it is opened, not shows
+const BUNDLE = /\.(?:app|appex|bundle|framework|plugin|kext|prefpane|qlgenerator|saver|workflow|xpc|mdimporter|action)\/?$/i
+
+/** What opening a pressed path runs (macOS `open`, then `xdg-open`): a plain directory is shown, anything else only revealed. */
+export function openCommands(path: string, kind: 'file' | 'dir' | 'other'): { argv: string[]; fallback: string[]; revealed: boolean } {
+  // a click never runs what it lands on: a file (a script, a `.command`) or an app bundle is revealed, not opened
+  if (kind === 'dir' && !BUNDLE.test(path)) return { argv: ['open', path], fallback: ['xdg-open', path], revealed: false }
+  const parent = path.replace(/\/+$/, '').replace(/\/[^/]*$/, '') || '/'
+  return { argv: ['open', '-R', path], fallback: ['xdg-open', parent], revealed: true }
 }
 
 /** The absolute path a `file://` URL names; undefined for anything else. */
@@ -83,32 +96,31 @@ export function findPaths(text: string): string[] {
 
 type Chunk = { text: string; fenced: boolean }
 
-/** The text cut at ``` fences: what is inside one is left as written. */
+/**
+ * The text cut at fences (``` or ~~~, three or more): what is inside one is left as written. A fence
+ * closes only on a line of the same character at least as long, so a ```` block may hold a ```.
+ */
 export function splitFences(text: string): Chunk[] {
   const out: Chunk[] = []
-  const lines = text.split('\n')
   let buf: string[] = []
-  let fenced = false
-  const flush = () => {
+  let open: { char: string; len: number } | undefined
+  const flush = (fenced: boolean) => {
     if (buf.length) out.push({ text: buf.join('\n'), fenced })
     buf = []
   }
-  for (const line of lines) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      if (!fenced) {
-        flush()
-        fenced = true
-        buf.push(line)
-      } else {
-        buf.push(line)
-        flush()
-        fenced = false
-      }
-      continue
-    }
-    buf.push(line)
+  for (const line of text.split('\n')) {
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    if (!open && m && !(m[1]![0] === '`' && m[2]!.includes('`'))) {
+      flush(false)
+      open = { char: m[1]![0]!, len: m[1]!.length }
+      buf.push(line)
+    } else if (open && m && m[1]![0] === open.char && m[1]!.length >= open.len && m[2]!.trim() === '') {
+      buf.push(line)
+      flush(true)
+      open = undefined
+    } else buf.push(line)
   }
-  flush()
+  flush(open !== undefined)
   // a chunk ends without its newline; put them back between chunks
   return out.map((c, i) => (i < out.length - 1 ? { ...c, text: `${c.text}\n` } : c))
 }
@@ -120,7 +132,14 @@ export type LinkifyOptions = {
   defaultRepo?: { owner: string; repo: string }
 }
 
-const escapeLabel = (s: string) => s.replace(/([[\]\\])/g, '\\$1')
+const PROTECT_RE = new RegExp([
+  /(`+)(?!`)([^\n]*?[^`\n])\1(?!`)/.source,
+  /\[[^\]\n]*\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/.source,
+  /<https?:[^>\s]+>/.source,
+  /https?:\/\/[^\s<>"'`　]+/.source,
+].join('|'), 'g')
+
+const escapeLabel = (s: string) => s.replace(/([[\]\\*_`~])/g, '\\$1')
 
 /**
  * `text` with each known path and each `#12` / `owner/repo#12` written as a Markdown link, and bare
@@ -135,13 +154,14 @@ export function linkify(text: string, options: LinkifyOptions): string {
 }
 
 function linkifyPlain(text: string, paths: ReadonlyMap<string, string>, defaultRepo?: { owner: string; repo: string }): string {
-  // protect what is already a link, a bare URL, or inline code that holds no path
+  // protect, in one pass so nothing is held twice: inline code (made a link when it is just a known
+  // path), a Markdown link with or without a title, an autolink, a bare URL
   const held: string[] = []
   const hold = (s: string) => `\uE000${held.push(s) - 1}\uE000`
-  let out = text.replace(/\[[^\]\n]*\]\([^)\s]*\)|<https?:[^>\s]+>|https?:\/\/[^\s<>"'`　]+/g, m => hold(m))
-  out = out.replace(/`([^`\n]+)`/g, (m, inner: string) => {
+  let out = text.replace(PROTECT_RE, (m, _ticks: string | undefined, inner: string | undefined) => {
+    if (inner === undefined) return hold(m)
     const abs = paths.get(inner.trim())
-    return hold(abs ? `[${escapeLabel(inner)}](${fileUrl(abs)})` : m)
+    return hold(abs ? `[${escapeLabel(inner.trim())}](${fileUrl(abs)})` : m)
   })
   if (paths.size) {
     out = out.replace(PATH_RE, m => {
