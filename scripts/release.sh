@@ -5,7 +5,8 @@
 #
 # バージョンは plugin.json と package.json の両方を上げる（同じ番号のままだと
 # 自動更新も `claude plugin update` も「最新」と判断して新しいコードを配らない）。
-# リリースノートを渡さなければ、前のタグからのコミットで作る。
+# CHANGELOG.md の `## [Unreleased]` を `## [X.Y.Z] - 日付` に書き換えて同じコミットに入れ、
+# その節をリリースノートにする（--notes を渡せばそちらを使う）。Unreleased が空なら止まる。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -57,12 +58,14 @@ claude plugin validate . >/dev/null
 echo "  ✔ 通過"
 
 LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+[ -f CHANGELOG.md ] || die "CHANGELOG.md が無い"
+# `## [Unreleased]` から次の `## [` までの本文（リンク定義の行は除く）
+UNRELEASED=$(awk '/^## \[Unreleased\]/{on=1; next} /^## \[/{on=0} /^\[[^]]+\]: /{next} on' CHANGELOG.md | sed -e '/./,$!d')
+[ -n "$(printf '%s' "$UNRELEASED" | tr -d '[:space:]')" ] || die "CHANGELOG.md の [Unreleased] が空（今回の変更を書いてから実行する）"
 if [ -n "$NOTES_FILE" ]; then
   NOTES=$(cat "$NOTES_FILE")
-elif [ -n "$LAST_TAG" ]; then
-  NOTES=$(printf '## %s からの変更\n\n%s\n' "$LAST_TAG" "$(git log --no-merges --pretty='- %s' "$LAST_TAG"..HEAD)")
 else
-  NOTES=$(printf '## 変更\n\n%s\n' "$(git log --no-merges --pretty='- %s' -20)")
+  NOTES=$(printf '## %s からの変更\n\n%s\n' "${LAST_TAG:-最初の版}" "$UNRELEASED")
 fi
 NOTES=$(printf '%s\n\n**更新**: 自動更新を入れていれば次の起動で入る。手動なら `claude plugin update kaneed-dungeon@kaneed-dungeon`（再起動で反映）。\n' "$NOTES")
 
@@ -73,6 +76,12 @@ if [ "$DRY" = 0 ]; then
   for f in .claude-plugin/plugin.json package.json; do
     perl -0pi -e "s/\"version\": \"\Q$CURRENT\E\"/\"version\": \"$NEXT\"/" "$f"
   done
+  # [Unreleased] をこの版の節にし、空の [Unreleased] と比較リンクを足す
+  TODAY=$(date +%Y-%m-%d)
+  REPO_URL=https://github.com/aieo-product/kaneed-dungeon-claudemod
+  perl -0pi -e "s/^## \[Unreleased\]\n/## [Unreleased]\n\n## [$NEXT] - $TODAY\n/m" CHANGELOG.md
+  perl -0pi -e "s{^\[Unreleased\]: \S+\n}{[Unreleased]: $REPO_URL/compare/v$NEXT...HEAD\n[$NEXT]: $REPO_URL/compare/v$CURRENT...v$NEXT\n}m" CHANGELOG.md
+  git add CHANGELOG.md
   git commit -qam "chore: バージョンを $NEXT に上げる
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
@@ -85,6 +94,7 @@ if [ "$DRY" = 0 ]; then
   git checkout -q main
   git pull -q --ff-only origin main
 else
+  echo "  (dry-run) CHANGELOG.md の [Unreleased] を [$NEXT] にする"
   echo "  (dry-run) gh pr create / gh pr merge"
   git checkout -q main
   git branch -q -D "$BRANCH" 2>/dev/null || true
