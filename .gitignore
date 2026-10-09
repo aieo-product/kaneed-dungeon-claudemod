@@ -5,3 +5,4 @@ node_modules/
 .agent/logs/
 tools/sprites/__pycache__/
 **/__pycache__/
+tools/pv/work/

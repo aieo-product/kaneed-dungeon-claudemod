@@ -16,6 +16,10 @@ Claude が考えている間、カニード がプロンプトの上でダンジ
 
 ![スライムが右から現れ、カニードが踏み込んで攻撃、撃破してレベルアップするまで](docs/play.gif)
 
+[![v0.6.0 のデモ動画（66 秒）: 会話ログのパスをクリックで開く](docs/pv-poster.jpg)](docs/media/kaneed-dungeon-pv-16x9.mp4)
+
+▶ v0.6.0 デモ動画「会話ログのリンク」: [横 16:9](docs/media/kaneed-dungeon-pv-16x9.mp4) · [縦 9:16](docs/media/kaneed-dungeon-pv-9x16.mp4)（作り方は [tools/pv/](tools/pv/README.md)）
+
 | ボス戦 | ショップ（見つけた階だけ） |
 |---|---|
 | ![コウモリのボスとの戦闘](docs/boss.gif) | ![ショップで薬草を買ってHPが回復した場面](docs/shop.png) |
