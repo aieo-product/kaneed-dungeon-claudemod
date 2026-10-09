@@ -1134,7 +1134,7 @@ function linksView(s: Local, links: LinkRow[], header: RenderElement, cols: numb
 }
 
 // ---- the dashboard: this session, in numbers ----
-// Five sections, each a list of lines in the order they matter: what Claude's turns spent, the
+// Six sections, each a list of lines in the order they matter: what Claude's turns spent, the
 // turns that spent the most, what the context window holds and what is left of the usage windows,
 // the events the hooks module caught, and Kaneed's record. Wide bands put them side by side;
 // narrow ones stack them and give each a share of the rows.

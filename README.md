@@ -10,6 +10,7 @@ Claude が考えている間、カニード がプロンプトの上でダンジ
 - マップはセッション開始時に生成され、コンテキスト圧縮（compaction）が起きると同じ階が組み替わる。90×46 マスの階を探索し尽くすと階段で次の階へ。
 - **横スクロールのアクション画面**。左に カニード、右から敵・宝箱・階段が現れる。攻撃は FF 風に前へ踏み込み、ヒットで敵が光ってダメージ数字が浮かぶ。右上にその階の周辺マップ。
 - ユーザーができるのは表示の切り替えだけ（Game / Dash / Status / Log / Links / Settings タブ）。カニード の操作はできない。
+- **会話ログの中のパス・`#12`・URL がクリックで開ける**。ディレクトリは Finder、コードはエディタのその行、issue はブラウザで開く（下記）。
 - **ダッシュボード**では、このセッションで Claude が何にトークンを使ったか（種類の内訳・キャッシュの効き・重かったターン・コスト・コンテキストの中身・利用上限）と、プラグインが受け取ったイベント、カニード の記録を見られる。
 - トークンは一切消費しない。すべてプラグイン内の TypeScript が処理する。
 
@@ -51,7 +52,7 @@ Claude が考えている間、カニード がプロンプトの上でダンジ
 
 ## 必要なもの
 
-- Claude Code 2.1.269 以降、`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` を設定した状態（早期アクセス機能。API は予告なく変わる可能性がある）。
+- Claude Code 2.1.269 以降、`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` を設定した状態（早期アクセス機能。API は予告なく変わる可能性がある）。会話ログのリンクには 2.1.293 以降が要る。
 - 対話型のターミナルセッション。`claude -p`・デスクトップアプリ・モバイルでは描画されない。
 - 罫線・ブロック文字が表示できるフォント。
 
@@ -105,7 +106,7 @@ claude --plugin-dir .
 | 操作 | 内容 |
 |---|---|
 | 帯の `Game` タブ / `/kaneed` | 横スクロールのゲーム画面。マップ、HP、階層、討伐数、所持金、現在の状況 |
-| `Dash` タブ / `/kaneed dash` | このセッションの統計グラフ（下記） |
+| `Dash` タブ / `/kaneed dash` | このセッションのトークン消費・コンテキスト・利用上限・イベント・ゲーム記録（下記） |
 | `Status` タブ / `/kaneed status` | カニード の顔、攻撃・防御・会心・回避、5 部位の装備 |
 | `Log` タブ / `/kaneed log` | 直近の行動ログと、これまでの冒険（死亡記録） |
 | `Links` タブ / `/kaneed links` | 会話に出てきた issue / PR / リンクの一覧（下記）。行を押すとブラウザで開く |
@@ -157,7 +158,7 @@ Claude の応答に出てきた **パス**（`/abs/path`、`~/path`、`docs/` �
 
 ### ダッシュボード（Dash タブ）
 
-このセッションで Claude が何にトークンを使ったかを主役に、5 つの区画で表示する。帯が広ければ横に 3 列、狭ければ縦に積む。集計はメモリ上だけで、セッションが変わると 0 から始まる。
+このセッションで Claude が何にトークンを使ったかを主役に、6 つの区画で表示する。帯の幅に合わせて 3 列・2 列・1 列（縦積み）に並ぶ。集計はメモリ上だけで、セッションが変わると 0 から始まる。
 
 ダッシュボードもトークンを消費しない。数字はすべて、プラグインが受け取るイベントの入力（`turn.complete` に付いてくる、Claude の応答で実際に使われた usage など）と、ステータスラインと同じ `$.session.usage()` から取る。引数なしの呼び出しは API リクエストを出さず、コンテキストの内訳に使う `breakdown: 'summary'` もローカルの見積もりだけで済む（1 カテゴリごとにトークンカウント API を叩く `'full'` は使わない）。サブエージェントの種類名は `$.agent.list()` で読む（セッションが既に持つ一覧を読むだけで、何も起動しない）。モデル呼び出し・サブエージェントの起動・プロンプト送信・圧縮と、`'summary'` 以外の usage 引数を `hooks/` で使っていないことは `tests/no-tokens.test.ts` が確かめる。
 
@@ -199,32 +200,33 @@ Claude の応答に出てきた **パス**（`/abs/path`、`~/path`、`docs/` �
 ## 開発
 
 ```sh
-bun test                                             # ゲームロジック（マップ・装備・成長・シミュレーション）
-bunx --bun oxlint@1.83.0 hooks tests --deny-warnings # lint
-claude plugin validate .claude-plugin/plugin.json    # フックするイベント・$ 呼び出し・surface モジュールの一覧
-claude plugin validate .                             # マーケットプレイスマニフェスト
+bun install          # 初回だけ（テストと lint のための依存）
+bun run test         # ゲームロジック・リンクの書き換えなどのユニットテスト
+bun run typecheck    # 型チェック（下の型定義が要る）
+bun run lint         # oxlint
+bun run validate     # claude plugin validate（plugin.json とマーケットプレイス）
 ```
 
-リリースは `scripts/release.sh` 1 本で通す（`main` で、作業ツリーがきれいな状態で実行する）:
+**型定義**は早期アクセス API のもので、リポジトリには入れていない。function hooks を有効にした状態でこのフォルダを `claude --plugin-dir .` で一度起動すると、エンジンが `.claude-plugin/types/` に書き出す（git 管理外）。Claude Code を更新したら、もう一度起動すれば新しい版に置き換わる。
+
+手元の変更を試すときも `claude --plugin-dir .` で起動する。インストール済みの kaneed-dungeon より、このフォルダの版が優先して読み込まれる。
+
+### 変更履歴とリリース
+
+変更を入れたら、`CHANGELOG.md` の `## [Unreleased]` に「追加 / 変更 / 修正 / 削除」の見出しで書く（[Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) の書式）。リリースは `scripts/release.sh` 1 本で通す（`main` で、作業ツリーがきれいな状態で実行する）:
 
 ```sh
 scripts/release.sh patch --dry-run            # 何をするか見るだけ
-scripts/release.sh minor                      # 0.3.x → 0.4.0
+scripts/release.sh minor                      # 0.6.x → 0.7.0
 scripts/release.sh 1.0.0 --notes notes.md     # 番号とノートを指定
 ```
 
-検査（テスト・型・lint・マニフェスト）を通してから、`plugin.json` と `package.json` の両方のバージョンを上げ、PR を作ってマージし、`vX.Y.Z` のタグと GitHub リリースを出す。ノートを渡さなければ前のタグからのコミットで作る。**バージョンを上げないと誰にも配られない**ので、リリースはこのスクリプトを通す。
-
-型チェックには早期アクセスの型定義が必要。function hooks を有効にしたセッションをこのフォルダで開き `/plugin-types` を実行すると `.claude/types/` に書き出される（git 管理外）。その後:
-
-```sh
-bunx -p typescript tsc -p .
-```
+検査（テスト・型・lint・マニフェスト）を通してから、`plugin.json` と `package.json` の両方のバージョンを上げ、`CHANGELOG.md` の `[Unreleased]` をその版の節に書き換え、PR を作ってマージし、`vX.Y.Z` のタグと GitHub リリースを出す。リリースノートは `[Unreleased]` の中身（`--notes` を渡せばそちら）。`[Unreleased]` が空なら止まる。**バージョンを上げないと誰にも配られない**ので、リリースはこのスクリプトを通す。
 
 構成:
 
-- `hooks/register.tsx` — hooks モジュール。`/kaneed` の登録、`$.store` への保存、`turn.start` / `turn.complete` による作業中判定、`tool.call` でのテスト成否検出、`session.compact` でのマップ再生成、`ui.render` での帯描画、起動時の更新確認（1 日 1 回、`$.http.fetch` で GitHub の `plugin.json` を読むだけ）。
-- `hooks/links/` — Links タブの純粋ロジック。`extract.ts`（URL・`owner/repo#N` の抽出と重複排除）、`summary.ts`（`gh api` の結果とページ `<title>` からの概要）、`linkify.ts`（応答中のパス・`#N` を Markdown リンクに書き換える）。transcript の読み取り・概要の取得・ブラウザ起動は `hooks/register.tsx` 側。
+- `hooks/register.tsx` — hooks モジュール。`/kaneed` の登録、`$.store` への保存、`turn.start` / `turn.complete` による作業中判定、`tool.call` でのテスト成否検出、`session.compact` でのマップ再生成、`ui.render` での帯描画（`AbovePrompt`）と返信の描き直し（`AssistantMessage`、会話ログのリンク）、リンクを押したときに開く処理、起動時の更新確認（1 日 1 回、`$.http.fetch` で GitHub の `plugin.json` を読むだけ）。
+- `hooks/links/` — Links タブと会話ログのリンクの純粋ロジック。`extract.ts`（URL・`owner/repo#N` の抽出と重複排除）、`summary.ts`（`gh api` の結果とページ `<title>` からの概要）、`linkify.ts`（応答中のパス・`#N` を Markdown リンクに書き換える）。transcript の読み取り・概要の取得・ブラウザ起動は `hooks/register.tsx` 側。
 - `hooks/boards/dungeon.tsx` — surface モジュール。0.1 秒ごとに 1 フレーム描き、5 フレームごとにシミュレーションを 1 ティック進める。ピクセルバッファ（1 文字 = 横 1px × 縦 2px、`▀` と前景・背景色）に背景・スプライトを合成し、その上に数字・エフェクト・ミニマップを重ねる。描く色はすべて xterm-256 パレットへ丸める。Claude Code の描画側は chalk 方式（各チャンネル `round(v/255*5)`）で 256 色へ落とすので、その丸めで狙いのパレット色に着地する値（各チャンネル 51 の倍数、グレーは 8+10n）で出力する。
 - `hooks/boards/sprites.ts` — スプライトデータ（生成物）。`tools/sprites/` に作り方がある。
 - `hooks/game/*.ts` — 純関数のゲームロジック。`rng`（シード付き乱数）、`map`（部屋と通路の生成・BFS）、`items`（装備）、`shop`（ショップの棚・値段・買う品の候補）、`hero`（成長・回復・装備）、`enemies`（敵の生成）、`sim`（1 ティックの進行）、`detect`（テストコマンドの判定）、`update`（バージョン比較）。
@@ -274,6 +276,10 @@ python3 tools/sprites/make_sprites.py hooks/boards/sprites.ts
 - Claude Mods（function hooks）の議論: https://github.com/anthropics/claude-code/issues/91870
 - 公式 built-in mods のソースと型定義: https://github.com/anthropics/claude-code/tree/main/mods
 - 先行事例 cc-arcade（描画の作法を参考にした）: https://github.com/sezaakgun/cc-arcade
+
+## 変更履歴
+
+[CHANGELOG.md](CHANGELOG.md)。各バージョンの GitHub リリースは https://github.com/aieo-product/kaneed-dungeon-claudemod/releases 。
 
 ## ライセンス
 
