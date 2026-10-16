@@ -110,7 +110,8 @@ const linkFetching = new Set<string>()
 // the linkTitles option: whether a page other than GitHub's is asked for its <title>
 let linkTitles = true
 
-const linkLog = ($: EngineInterface, text: string) => $.ui.log(`kaneed-dungeon: links: ${text}`)
+// a link that fails to summarize is routine (a made-up host, a dead page): the debug log only, never the transcript
+const linkLog = ($: EngineInterface, text: string) => $.ui.log(`kaneed-dungeon: links: ${text}`, { to: 'debug' })
 const isCache = (v: unknown): v is Record<string, Cached> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 function applyCache(list: Link[]): Link[] {
@@ -173,6 +174,7 @@ async function summarizeLink($: EngineInterface, link: Link, fetchTitles: boolea
   if (link.github) {
     const { owner, repo, number } = link.github
     const { exitCode, stdout, stderr } = await $.process.run(['gh', 'api', `repos/${owner}/${repo}/issues/${number}`], { timeoutMs: 15000 })
+      .catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
     if (exitCode !== 0) {
       linkLog($, `gh api ${owner}/${repo}#${number} failed: ${stderr.trim().split('\n')[0] ?? exitCode}`)
       return { summary: link.label ?? `${owner}/${repo}#${number}`, kind: link.kind }
@@ -181,8 +183,13 @@ async function summarizeLink($: EngineInterface, link: Link, fetchTitles: boolea
     return parsed ? { summary: parsed.text, kind: parsed.kind } : undefined
   }
   if (fetchTitles && isFetchable(link.url)) {
-    const answer = await $.http.fetch(link.url, { headers: { accept: 'text/html' } })
-    const title = answer.ok ? htmlTitle(answer.text.slice(0, 200_000)) : undefined
+    // a host that does not resolve or a TLS failure falls back to the URL's own summary, which is
+    // cached like a title so the link is not asked again every turn
+    const answer = await $.http.fetch(link.url, { headers: { accept: 'text/html' } }).catch((err: unknown) => {
+      linkLog($, `title of ${link.url} failed: ${err}`)
+      return undefined
+    })
+    const title = answer?.ok ? htmlTitle(answer.text.slice(0, 200_000)) : undefined
     if (title) return { summary: title, kind: 'link' }
   }
   return { summary: link.label ?? hostSummary(link.url), kind: 'link' }
@@ -323,9 +330,10 @@ async function openPressed($: EngineInterface, href: string) {
   await runOpener($, cmds, shown)
 }
 
-// summaries cost a `gh api` or a page fetch each: asked for only while the tab is open, not awaited
+// summaries cost a `gh api` or a page fetch each: asked for only while the tab is open (and the band
+// shown: Close leaves `view` on the tab), not awaited
 function fillIfOpen($: EngineInterface) {
-  if (view === 'links') void fillLinks($, linkTitles).catch(err => $.ui.log(`kaneed-dungeon: link summaries failed: ${err}`))
+  if (visible && view === 'links') void fillLinks($, linkTitles).catch(err => linkLog($, `summaries failed: ${err}`))
 }
 
 export const register: Register = (on, options) => {

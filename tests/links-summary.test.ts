@@ -53,8 +53,23 @@ describe('hostSummary', () => {
 
 describe('isFetchable', () => {
   test('public http(s) hosts are', () => {
-    expect(isFetchable('https://example.com/x')).toBe(true)
+    expect(isFetchable('https://github.com/x')).toBe(true)
+    expect(isFetchable('https://docs.anthropic.com/en/')).toBe(true)
     expect(isFetchable('http://8.8.8.8/')).toBe(true)
+  })
+  test('reserved example names and single-label hosts are not: no page answers them', () => {
+    for (const url of [
+      'https://example.com/x',
+      'http://order.example.com/api/incidents?year=2023',
+      'http://since-cache.example.net/api/latest',
+      'https://example.org/',
+      'http://api.example/',
+      'http://shop.test/',
+      'http://nothing.invalid/',
+      'https://hacking-notification/',
+    ]) expect(isFetchable(url)).toBe(false)
+    expect(isFetchable('https://myexample.com/')).toBe(true)
+    expect(isFetchable('https://example.com.au/')).toBe(true)
   })
   test('loopback, private and link-local addresses are not', () => {
     for (const url of [
@@ -72,7 +87,7 @@ describe('isFetchable', () => {
     expect(isFetchable('http://172.32.0.1/')).toBe(true)
   })
   test('other schemes and junk are not', () => {
-    expect(isFetchable('ftp://example.com/')).toBe(false)
+    expect(isFetchable('ftp://github.com/')).toBe(false)
     expect(isFetchable('nope')).toBe(false)
   })
 })

@@ -40,7 +40,14 @@ export function hostSummary(url: string): string {
   }
 }
 
-/** Whether a page is worth asking for its title: http(s) on a public host, never a loopback, private or `.local` one. */
+/** Whether a host is a documentation or test name (RFC 2606, 6761) that no page answers for. */
+const isReserved = (host: string) =>
+  /(?:^|\.)example\.(?:com|net|org)$/.test(host) || /\.(?:example|test|invalid)$/.test(host)
+
+/**
+ * Whether a page is worth asking for its title: http(s) on a public host, never a loopback, private or
+ * `.local` one, a single-label name (`http://foo/`) or a reserved example one.
+ */
 export function isFetchable(url: string): boolean {
   let u: URL
   try {
@@ -51,6 +58,8 @@ export function isFetchable(url: string): boolean {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
   const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '')
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === '0.0.0.0') return false
+  if (isReserved(host)) return false
+  if (!host.includes('.') && !host.includes(':')) return false
   if (host === '::1' || host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) return false
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
   if (m) {
