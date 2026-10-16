@@ -97,6 +97,9 @@ async function refreshUsage($: EngineInterface, breakdown = false) {
 // link is not fetched twice. The extraction and the summaries (./links/) are ported from linktray.
 
 type Cached = { summary: string; kind: Link['kind'] }
+// `unreached`: the page did not answer at all (offline, a host that does not resolve, a TLS failure).
+// Its stand-in summary holds for this session only, so a later session asks once more.
+type Summary = Cached & { unreached?: true }
 
 const RESCAN_TAIL = 20
 const FETCH_AT_ONCE = 3
@@ -110,7 +113,8 @@ const linkFetching = new Set<string>()
 // the linkTitles option: whether a page other than GitHub's is asked for its <title>
 let linkTitles = true
 
-const linkLog = ($: EngineInterface, text: string) => $.ui.log(`kaneed-dungeon: links: ${text}`)
+// a link that fails to summarize is routine (a made-up host, a dead page): the debug log only, never the transcript
+const linkLog = ($: EngineInterface, text: string) => $.ui.log(`kaneed-dungeon: links: ${text}`, { to: 'debug' })
 const isCache = (v: unknown): v is Record<string, Cached> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 function applyCache(list: Link[]): Link[] {
@@ -169,10 +173,11 @@ function noteLinks(text: string, seenAt: number) {
 /** After a main turn: the last messages again, where the replies and the tool results landed. */
 const rescanLinks = ($: EngineInterface) => scanLinks($, Math.max(0, linkScanned - RESCAN_TAIL))
 
-async function summarizeLink($: EngineInterface, link: Link, fetchTitles: boolean): Promise<Cached | undefined> {
+async function summarizeLink($: EngineInterface, link: Link, fetchTitles: boolean): Promise<Summary | undefined> {
   if (link.github) {
     const { owner, repo, number } = link.github
     const { exitCode, stdout, stderr } = await $.process.run(['gh', 'api', `repos/${owner}/${repo}/issues/${number}`], { timeoutMs: 15000 })
+      .catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
     if (exitCode !== 0) {
       linkLog($, `gh api ${owner}/${repo}#${number} failed: ${stderr.trim().split('\n')[0] ?? exitCode}`)
       return { summary: link.label ?? `${owner}/${repo}#${number}`, kind: link.kind }
@@ -181,7 +186,11 @@ async function summarizeLink($: EngineInterface, link: Link, fetchTitles: boolea
     return parsed ? { summary: parsed.text, kind: parsed.kind } : undefined
   }
   if (fetchTitles && isFetchable(link.url)) {
-    const answer = await $.http.fetch(link.url, { headers: { accept: 'text/html' } })
+    const answer = await $.http.fetch(link.url, { headers: { accept: 'text/html' } }).catch((err: unknown) => {
+      linkLog($, `title of ${link.url} failed: ${err}`)
+      return undefined
+    })
+    if (!answer) return { summary: link.label ?? hostSummary(link.url), kind: 'link', unreached: true }
     const title = answer.ok ? htmlTitle(answer.text.slice(0, 200_000)) : undefined
     if (title) return { summary: title, kind: 'link' }
   }
@@ -199,7 +208,9 @@ async function fillLinks($: EngineInterface, fetchTitles: boolean) {
       try {
         const entry = await summarizeLink($, link, fetchTitles)
         if (entry) {
-          await remember($, key, entry)
+          // the list keeps it either way, so the link is not asked again this session; an unreached
+          // page is not saved, or its title would never be asked for once the network is back
+          if (!entry.unreached) await remember($, key, { summary: entry.summary, kind: entry.kind })
           links = links.map(l => (normalizeUrl(l.url) === key ? { ...l, summary: entry.summary, kind: entry.kind } : l))
           $.ui.invalidate('ui.render')
         }
@@ -323,9 +334,10 @@ async function openPressed($: EngineInterface, href: string) {
   await runOpener($, cmds, shown)
 }
 
-// summaries cost a `gh api` or a page fetch each: asked for only while the tab is open, not awaited
+// summaries cost a `gh api` or a page fetch each: asked for only while the tab is open (and the band
+// shown: Close leaves `view` on the tab), not awaited
 function fillIfOpen($: EngineInterface) {
-  if (view === 'links') void fillLinks($, linkTitles).catch(err => $.ui.log(`kaneed-dungeon: link summaries failed: ${err}`))
+  if (visible && view === 'links') void fillLinks($, linkTitles).catch(err => linkLog($, `summaries failed: ${err}`))
 }
 
 export const register: Register = (on, options) => {
