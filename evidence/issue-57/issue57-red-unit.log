@@ -1,0 +1,22 @@
+bun test v1.3.11 (af24e281)
+
+tests/links-summary.test.ts:
+65 |       'https://example.org/',
+66 |       'http://api.example/',
+67 |       'http://shop.test/',
+68 |       'http://nothing.invalid/',
+69 |       'https://hacking-notification/',
+70 |     ]) expect(isFetchable(url)).toBe(false)
+                                     ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/Volumes/AIWorkSSD/AIWorkSpace/github/aieo-product/kaneed-dungeon-claudemod/tests/links-summary.test.ts:70:33)
+(fail) isFetchable > reserved example names and single-label hosts are not: no page answers them [1.50ms]
+
+ 14 pass
+ 1 fail
+ 35 expect() calls
+Ran 15 tests across 1 file. [12.00ms]

@@ -1,0 +1,3 @@
+[DEBUG] [kaneed-dungeon] $.ui.log (to debug): kaneed-dungeon: links: title of https://kaneed-nx-g57-a.com/page failed: HooksError: kaneed-dungeon: $.http.fetch(https://kaneed-nx-g57-a.com/page) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-g57-a.com
+[DEBUG] [kaneed-dungeon] $.ui.log (to debug): kaneed-dungeon: links: title of https://kaneed-nx-g57-c.com/closed2 failed: HooksError: kaneed-dungeon: $.http.fetch(https://kaneed-nx-g57-c.com/closed2) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-g57-c.com
+[DEBUG] [kaneed-dungeon] $.ui.log (to debug): kaneed-dungeon: links: title of https://kaneed-nx-g57-b.com/closed failed: HooksError: kaneed-dungeon: $.http.fetch(https://kaneed-nx-g57-b.com/closed) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-g57-b.com

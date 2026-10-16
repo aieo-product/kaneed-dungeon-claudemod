@@ -1,0 +1,56 @@
+===== (3) /kaneed hide 後、閉じたままのターンの画面（tmux の画面が入りきらず、上は切れている） =====
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-b.com/closed failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-b.com/closed) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-b.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-c.com/closed2 failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-c.com/closed2) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-c.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-a.com/page failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-a.com/page) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-a.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of http://order.example.com/api?x=r57 failed: HooksError: kaneed-dungeon:
+  $.http.fetch(http://order.example.com/api?x=r57) failed: ENOTFOUND: getaddrinfo ENOTFOUND order.example.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://hacking-notification-r57/ failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://hacking-notification-r57/) failed: ENOTFOUND: getaddrinfo ENOTFOUND hacking-notification-r57
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-b.com/closed failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-b.com/closed) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-b.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-c.com/closed2 failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-c.com/closed2) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-c.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-a.com/page failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-a.com/page) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-a.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of http://order.example.com/api?x=r57 failed: HooksError: kaneed-dungeon:
+  $.http.fetch(http://order.example.com/api?x=r57) failed: ENOTFOUND: getaddrinfo ENOTFOUND order.example.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://hacking-notification-r57/ failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://hacking-notification-r57/) failed: ENOTFOUND: getaddrinfo ENOTFOUND hacking-notification-r57
+❯ Reply with only the word OK.
+⏺ OK
+✻ Worked for 1s · done 15:25
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-b.com/closed failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-b.com/closed) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-b.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-c.com/closed2 failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-c.com/closed2) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-c.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-a.com/page failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-a.com/page) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-a.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of http://order.example.com/api?x=r57 failed: HooksError: kaneed-dungeon:
+  $.http.fetch(http://order.example.com/api?x=r57) failed: ENOTFOUND: getaddrinfo ENOTFOUND order.example.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://hacking-notification-r57/ failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://hacking-notification-r57/) failed: ENOTFOUND: getaddrinfo ENOTFOUND hacking-notification-r57
+❯ 
+
+===== (4) /kaneed links で開き直した直後 =====
+❯ /kaneed links
+  ⎿  kaneed-dungeon: カニード · 冒険 #2 · B1F · Lv 3 · HP 80 · 上のボタンで表示を切り替え · /kaneed hide で閉じる
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-b.com/closed failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-b.com/closed) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-b.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-c.com/closed2 failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-c.com/closed2) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-c.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://kaneed-nx-r57-a.com/page failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://kaneed-nx-r57-a.com/page) failed: ENOTFOUND: getaddrinfo ENOTFOUND kaneed-nx-r57-a.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of http://order.example.com/api?x=r57 failed: HooksError: kaneed-dungeon:
+  $.http.fetch(http://order.example.com/api?x=r57) failed: ENOTFOUND: getaddrinfo ENOTFOUND order.example.com
+⏺ kaneed-dungeon: kaneed-dungeon: links: summary of https://hacking-notification-r57/ failed: HooksError: kaneed-dungeon:
+  $.http.fetch(https://hacking-notification-r57/) failed: ENOTFOUND: getaddrinfo ENOTFOUND hacking-notification-r57
+▌会話リンク [ ▲ ] [ ▼ ] 1-5 / 5 件  行を押すとブラウザで開く
+↗ kaneed-nx-r57-b.com/closed  https://kaneed-nx-r57-b.com/closed
+↗ kaneed-nx-r57-c.com/closed2  https://kaneed-nx-r57-c.com/closed2
+↗ kaneed-nx-r57-a.com/page  https://kaneed-nx-r57-a.com/page
+↗ order.example.com/api  http://order.example.com/api?x=r57
+↗ hacking-notification-r57  https://hacking-notification-r57/
+❯ 

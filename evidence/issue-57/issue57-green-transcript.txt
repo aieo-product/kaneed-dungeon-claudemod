@@ -1,0 +1,26 @@
+===== (1)〜(3) タブを開いて URL → /kaneed hide → 閉じたまま 2 ターン =====
+❯ /kaneed links
+  ⎿  kaneed-dungeon: カニード · 冒険 #2 · B1F · Lv 3 · HP 80 · 上のボタンで表示を切り替え · /kaneed hide で閉じる
+❯ Reply with only the word OK. urls: https://kaneed-nx-g57-a.com/page http://order.example.com/api?x=g57 https://hacking-notification-g57/
+⏺ OK
+✻ Sautéed for 3s · done 15:27
+❯ /kaneed hide
+  ⎿  kaneed-dungeon: カニード の画面を閉じた。/kaneed で再表示（探索は止まる）
+❯ Reply with only the word OK. urls: https://kaneed-nx-g57-b.com/closed https://kaneed-nx-g57-c.com/closed2
+⏺ OK
+✻ Sautéed for 1s · done 15:28
+❯ Reply with only the word OK.
+⏺ OK
+✻ Sautéed for 1s · done 15:28
+❯ 
+
+===== (4) /kaneed links で開き直した直後 =====
+❯ /kaneed links
+  ⎿  kaneed-dungeon: カニード · 冒険 #2 · B1F · Lv 3 · HP 80 · 上のボタンで表示を切り替え · /kaneed hide で閉じる
+▌会話リンク [ ▲ ] [ ▼ ] 1-5 / 5 件  行を押すとブラウザで開く
+↗ kaneed-nx-g57-b.com/closed  https://kaneed-nx-g57-b.com/closed
+↗ kaneed-nx-g57-c.com/closed2  https://kaneed-nx-g57-c.com/closed2
+↗ kaneed-nx-g57-a.com/page  https://kaneed-nx-g57-a.com/page
+↗ order.example.com/api  http://order.example.com/api?x=g57
+↗ hacking-notification-g57  https://hacking-notification-g57/
+❯ 
