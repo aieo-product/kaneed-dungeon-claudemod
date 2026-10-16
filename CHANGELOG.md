@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-16
+
 ### 追加
 
 - 変更履歴（この `CHANGELOG.md`）。`scripts/release.sh` は `[Unreleased]` が空だとリリースを止め、空でなければその節を新しいバージョンの節に書き換えて、リリースノートにも使う。
@@ -113,7 +115,8 @@
 - セッション統計のダッシュボード、ステータス画面、行動ログ（#24）。
 - `hooks/` がトークンを消費する呼び出しをしていないことを検査するテスト（#24）。
 
-[Unreleased]: https://github.com/aieo-product/kaneed-dungeon-claudemod/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/aieo-product/kaneed-dungeon-claudemod/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/aieo-product/kaneed-dungeon-claudemod/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/aieo-product/kaneed-dungeon-claudemod/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/aieo-product/kaneed-dungeon-claudemod/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/aieo-product/kaneed-dungeon-claudemod/compare/v0.4.0...v0.5.0
