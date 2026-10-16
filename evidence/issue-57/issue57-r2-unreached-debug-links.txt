@@ -1,0 +1,2 @@
+debug-2 [DEBUG] [kaneed-dungeon] $.ui.log (to debug): kaneed-dungeon: links: title of https://kaneed-nx-u57-a.com/x failed: HooksError: kaneed-dungeon: $.http.fetch(https://kaneed-nx-u57-a.com/x) failed: ENOTFOUND: getaddrinfo ENO
+debug-1 [DEBUG] [kaneed-dungeon] $.ui.log (to debug): kaneed-dungeon: links: title of https://kaneed-nx-u57-a.com/x failed: HooksError: kaneed-dungeon: $.http.fetch(https://kaneed-nx-u57-a.com/x) failed: ENOTFOUND: getaddrinfo ENO

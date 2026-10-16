@@ -1,0 +1,7 @@
+session 1: title fetches of the unreached page: 1 (3 turns with the tab open)
+session 1: store has unreached: not saved | 
+session 1: store has reached:   saved | Internet Assigned Numbers Authority
+session id: 8547ac32-5c41-4e12-ae1d-038d273e6835
+session 2: title fetches of the unreached page: 1 (asked once more)
+session 2: title fetches of the reached page (should be 0, cached): 0
+transcript-bound links: lines in both sessions: 0
