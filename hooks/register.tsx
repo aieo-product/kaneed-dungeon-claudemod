@@ -97,6 +97,9 @@ async function refreshUsage($: EngineInterface, breakdown = false) {
 // link is not fetched twice. The extraction and the summaries (./links/) are ported from linktray.
 
 type Cached = { summary: string; kind: Link['kind'] }
+// `unreached`: the page did not answer at all (offline, a host that does not resolve, a TLS failure).
+// Its stand-in summary holds for this session only, so a later session asks once more.
+type Summary = Cached & { unreached?: true }
 
 const RESCAN_TAIL = 20
 const FETCH_AT_ONCE = 3
@@ -170,7 +173,7 @@ function noteLinks(text: string, seenAt: number) {
 /** After a main turn: the last messages again, where the replies and the tool results landed. */
 const rescanLinks = ($: EngineInterface) => scanLinks($, Math.max(0, linkScanned - RESCAN_TAIL))
 
-async function summarizeLink($: EngineInterface, link: Link, fetchTitles: boolean): Promise<Cached | undefined> {
+async function summarizeLink($: EngineInterface, link: Link, fetchTitles: boolean): Promise<Summary | undefined> {
   if (link.github) {
     const { owner, repo, number } = link.github
     const { exitCode, stdout, stderr } = await $.process.run(['gh', 'api', `repos/${owner}/${repo}/issues/${number}`], { timeoutMs: 15000 })
@@ -183,13 +186,12 @@ async function summarizeLink($: EngineInterface, link: Link, fetchTitles: boolea
     return parsed ? { summary: parsed.text, kind: parsed.kind } : undefined
   }
   if (fetchTitles && isFetchable(link.url)) {
-    // a host that does not resolve or a TLS failure falls back to the URL's own summary, which is
-    // cached like a title so the link is not asked again every turn
     const answer = await $.http.fetch(link.url, { headers: { accept: 'text/html' } }).catch((err: unknown) => {
       linkLog($, `title of ${link.url} failed: ${err}`)
       return undefined
     })
-    const title = answer?.ok ? htmlTitle(answer.text.slice(0, 200_000)) : undefined
+    if (!answer) return { summary: link.label ?? hostSummary(link.url), kind: 'link', unreached: true }
+    const title = answer.ok ? htmlTitle(answer.text.slice(0, 200_000)) : undefined
     if (title) return { summary: title, kind: 'link' }
   }
   return { summary: link.label ?? hostSummary(link.url), kind: 'link' }
@@ -206,7 +208,9 @@ async function fillLinks($: EngineInterface, fetchTitles: boolean) {
       try {
         const entry = await summarizeLink($, link, fetchTitles)
         if (entry) {
-          await remember($, key, entry)
+          // the list keeps it either way, so the link is not asked again this session; an unreached
+          // page is not saved, or its title would never be asked for once the network is back
+          if (!entry.unreached) await remember($, key, { summary: entry.summary, kind: entry.kind })
           links = links.map(l => (normalizeUrl(l.url) === key ? { ...l, summary: entry.summary, kind: entry.kind } : l))
           $.ui.invalidate('ui.render')
         }
